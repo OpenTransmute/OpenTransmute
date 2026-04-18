@@ -38,7 +38,7 @@ The `claude` CLI is only required if you intend to use the **Claude Agent (Claud
 ## Running the Web App
 
 ```bash
-git clone https://github.com/JamesBreakerOfThings/OpenTransmute
+git clone https://github.com/OpenTransmute/OpenTransmute
 cd OpenTransmute/src/OpenTransmute
 dotnet run
 ```

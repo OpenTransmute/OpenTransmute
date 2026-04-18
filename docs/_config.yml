@@ -16,10 +16,11 @@ search:
 heading_anchors: true
 
 aux_links:
-  GitHub:
+  "⭐ GitHub":
     - https://github.com/OpenTransmute/OpenTransmute
 
 aux_links_new_tab: true
+aux_links_style: button
 
 nav_sort: case_insensitive
 

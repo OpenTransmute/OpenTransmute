@@ -16,7 +16,13 @@ permalink: /
   <a href="Introduction" class="btn btn-primary fs-5 mb-2 mb-md-0 mr-2">Introduction</a>
   <a href="getting-started" class="btn fs-5 mb-2 mb-md-0 mr-2">Get Started</a>
   <a href="Genesis" class="btn fs-5 mb-2 mb-md-0">Origin Story</a>
+  <a href="https://github.com/OpenTransmute/OpenTransmute" class="btn fs-5 mb-2 mb-md-0" target="_blank" rel="noopener">View on GitHub ↗</a>
 </div>
+
+---
+
+{: .warning }
+> **Work in progress** — OpenTransmute is under active development. Token usage, prompting strategies, and overall output quality are areas of active improvement. Expect rough edges.
 
 ---
 
