@@ -1,6 +1,5 @@
 using System.Text.Json.Serialization;
 using OpenTransmute.Models;
-using OpenTransmute.Orchestrator.Contracts;
 
 namespace OpenTransmute.Jobs;
 

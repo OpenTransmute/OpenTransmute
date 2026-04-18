@@ -561,21 +561,22 @@ The export format is:
 
 ## Prompts Reference
 
-OpenTransmute embeds prompt files as resources in the `OpenTransmute.Orchestrator` assembly:
+OpenTransmute embeds prompt files as resources in the `OpenTransmute.Core` assembly:
 
 | File | Purpose |
 |---|---|
-| `src/OpenTransmute.Orchestrator/Prompts/decompose.md` | Seven-phase codebase mapping prompt system. Drives phases 0–6. |
-| `src/OpenTransmute.Orchestrator/Prompts/compose.md` | Composition and validation prompt. Used by the Compose pipeline. |
+| `src/OpenTransmute.Core/Prompts/decompose.md` | Eight-phase codebase mapping prompt system. Drives phases 0–7. |
+| `src/OpenTransmute.Core/Prompts/compose.md` | Composition and validation prompt. Used by the Compose pipeline. |
+| `src/OpenTransmute.Core/Prompts/transmute.md` | Standing guards prepended to every Transmute and Implement prompt. |
 
-Both files are embedded as resources at build time. To customise a prompt, edit the `.md` file and rebuild:
+All files are embedded as resources at build time. To customise a prompt, edit the `.md` file and rebuild:
 
 ```bash
-cd src/OpenTransmute.Orchestrator
+cd src/OpenTransmute.Core
 dotnet build
 ```
 
-The prompts use `<project>`, `<path>`, and `<ListItem.X>` (for expansion phases, where `X` is a field name such as `groupName` or `files`) as substitution tokens. These are resolved at runtime by `PromptBuilder` in `OpenTransmute.Orchestrator.Parsing`.
+The prompts use `<project>`, `<path>`, and `<ListItem.X>` (for expansion phases, where `X` is a field name such as `groupName` or `files`) as substitution tokens. These are resolved at runtime by `PromptBuilder` in `OpenTransmute.Parsing`.
 
 Phase 3 is an *expansion phase*: a discovery prompt first asks the AI to return a JSON list of clusters, then a template prompt is run once per cluster with `<ListItem.groupName>` and `<ListItem.files>` substituted. This is detected automatically from the `## Phase 3` section in `decompose.md` via the `**Expansion Discovery:**` marker.
 
@@ -583,24 +584,30 @@ Phase 3 is an *expansion phase*: a discovery prompt first asks the AI to return 
 
 ## Contributing & Extending
 
-### Adding a new compose `ILlmBackend`
+### Adding a new AI backend (`ILlmExecutor`)
 
-`ILlmBackend` is the abstraction used by the **Compose** and **Implement** pipelines. For adding a new **Decompose** backend, implement `IDecomposeOrchestrator` from `OpenTransmute.Orchestrator.Contracts` instead.
+`ILlmExecutor` in `OpenTransmute.Llm` is the single abstraction used by all pipelines (Decompose, Compose, Implement, and Transmute). The `JobOrchestrator` selects the executor at runtime by matching `OrchestratorType`.
 
-1. Create a class in `src/OpenTransmute.Core/Llm/` that implements `ILlmBackend`:
+1. Create a class in `src/OpenTransmute.Core/Llm/` that implements `ILlmExecutor`:
    ```csharp
-   public class MyBackend : ILlmBackend
+   public class MyExecutor : ILlmExecutor
    {
-       public Task<string> CompleteAsync(LlmRequest request, CancellationToken ct) { ... }
+       public OrchestratorType BackendType => OrchestratorType.OpenAI; // reuse or extend the enum
+
+       public async IAsyncEnumerable<LlmOutputEvent> ExecuteAsync(
+           LlmExecutionContext ctx, CancellationToken ct)
+       {
+           // yield LlmLine events, then LlmCompleted or LlmFailed
+       }
    }
    ```
 2. Register it in `ServiceRegistration.cs` inside `AddOpenTransmuteCore`:
    ```csharp
-   services.AddSingleton<MyBackend>();
+   services.AddSingleton<ILlmExecutor, MyExecutor>();
    ```
-3. Add a selection option for it in `Components/Pages/Compose.razor` (web app) and/or the relevant CLI command.
+3. Add a selection option for it in `Components/Pages/Decompose.razor` (web app) and/or the relevant CLI command.
 
-Throw `LlmRateLimitException` for HTTP 429 responses and `LlmContextTooLargeException` when the context window is exceeded — the `RetryPolicy` in `OpenTransmute.Retry` handles both.
+Deliver failures as `LlmFailed` events rather than throwing — the retry logic in `OpenTransmute.Retry` intercepts these and applies backoff for rate limits and context-reduction for context overflow.
 
 ### Adding a new inventory category
 
@@ -612,7 +619,7 @@ Throw `LlmRateLimitException` for HTTP 429 responses and `LlmContextTooLargeExce
 
 ### Adding a new decompose phase
 
-Phases are data-driven — no code class is required. Add a new `## Phase N — Title` section to `src/OpenTransmute.Orchestrator/Prompts/decompose.md` following the existing conventions:
+Phases are data-driven — no code class is required. Add a new `## Phase N — Title` section to `src/OpenTransmute.Core/Prompts/decompose.md` following the existing conventions:
 
 - `**Goal:**` — description of what the phase produces
 - `**Model Weight:**` — `thick`, `normal`, or `thin`

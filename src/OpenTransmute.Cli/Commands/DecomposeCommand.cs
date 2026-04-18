@@ -2,7 +2,6 @@ using System.CommandLine;
 using Microsoft.Extensions.DependencyInjection;
 using OpenTransmute.Jobs;
 using OpenTransmute.Models;
-using OpenTransmute.Orchestrator.Contracts;
 
 namespace OpenTransmute.Cli.Commands;
 

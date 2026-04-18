@@ -4,8 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using OpenTransmute.Data;
 using OpenTransmute.Jobs;
 using OpenTransmute.Models;
-using OpenTransmute.Orchestrator.Contracts;
-using OpenTransmute.Orchestrator.Parsing;
+using OpenTransmute.Parsing;
 
 namespace OpenTransmute.Cli.Commands;
 
@@ -28,7 +27,7 @@ internal static class ComposeCommand
         var modelOpt     = new Option<string?>("--model") { Description = "Model override" };
         var maxTokensOpt = new Option<int?>("--max-tokens") { Description = "Max output tokens" };
         var timeoutOpt   = new Option<int?>("--timeout") { Description = "HTTP timeout in minutes" };
-        var ethosOpt     = new Option<string?>("--ethos") { Description = "Coding style / standards injected as a top-level instruction (overrides saved user-ethos)" };
+        var hintsOpt     = new Option<string?>("--hints") { Description = "Coding style / standards injected as a top-level instruction (overrides saved user hints)" };
 
         cmd.Options.Add(outputOpt);
         cmd.Options.Add(itemsOpt);
@@ -43,7 +42,7 @@ internal static class ComposeCommand
         cmd.Options.Add(modelOpt);
         cmd.Options.Add(maxTokensOpt);
         cmd.Options.Add(timeoutOpt);
-        cmd.Options.Add(ethosOpt);
+        cmd.Options.Add(hintsOpt);
 
         cmd.SetAction(async (parseResult, ct) =>
         {
@@ -66,7 +65,7 @@ internal static class ComposeCommand
             var model       = parseResult.GetValue(modelOpt);
             var maxTokens   = parseResult.GetValue(maxTokensOpt);
             var timeout     = parseResult.GetValue(timeoutOpt);
-            var ethos       = parseResult.GetValue(ethosOpt) ?? settings.UserEthos;
+            var hints       = parseResult.GetValue(hintsOpt) ?? settings.UserEthos;
 
             var orchestratorType = orch ?? settings.Orchestrator;
 
@@ -140,7 +139,7 @@ internal static class ComposeCommand
                 OutputRoot        = Directory.GetCurrentDirectory(),
                 MaxOutputTokens   = maxTokens ?? (settings.MaxOutputTokens > 0 ? settings.MaxOutputTokens : 8192),
                 TimeoutMinutes    = timeout ?? settings.TimeoutMinutes,
-                UserEthos         = ethos,
+                Hints             = hints,
             };
 
             var jobStore = sp.GetRequiredService<JobStore>();
@@ -158,8 +157,9 @@ internal static class ComposeCommand
 
             job.OnChanged += () =>
             {
-                while (logCursor < job.LogLines.Count)
-                    Console.WriteLine(job.LogLines[logCursor++]);
+                string[] snapshot = job.GetLogSnapshot();
+                while (logCursor < snapshot.Length)
+                    Console.WriteLine(snapshot[logCursor++]);
                 if (job.Status is JobStatus.Completed or JobStatus.Failed)
                     done.TrySetResult();
             };

@@ -1,5 +1,5 @@
 using System.CommandLine;
-using OpenTransmute.Orchestrator.Contracts;
+using OpenTransmute.Models;
 
 namespace OpenTransmute.Cli.Commands;
 

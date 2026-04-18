@@ -1,4 +1,4 @@
-using OpenTransmute.Orchestrator.Contracts;
+using OpenTransmute.Models;
 
 namespace OpenTransmute.Services;
 

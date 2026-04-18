@@ -30,20 +30,20 @@ public class GitSourceFetcher(ILogger<GitSourceFetcher> logger) : ISourceFetcher
     public Task<SourceResult> FetchAsync(string source, DecomposeOptions options, CancellationToken ct = default)
     {
         string cloneRoot = options.CloneDirectory ?? Path.GetTempPath();
-        string repoName = InferRepoName(source);
-        string destPath = Path.Combine(cloneRoot, $"opentransmute-{repoName}-{Guid.NewGuid():N}");
+        string repoName  = InferRepoName(source);
+        string destPath  = Path.Combine(cloneRoot, $"opentransmute-{repoName}-{Guid.NewGuid():N}");
 
         logger.LogInformation("Cloning {Source} to {Dest}", source, destPath);
 
-        CloneOptions cloneOptions = new CloneOptions
+        // LibGit2Sharp has no async clone API — run on a thread-pool thread so the
+        // background service loop is not blocked for the duration of the clone.
+        return Task.Run(() =>
         {
-            RecurseSubmodules = false
-        };
-
-        Repository.Clone(source, destPath, cloneOptions);
-
-        string projectName = string.IsNullOrWhiteSpace(options.ProjectName) ? repoName : options.ProjectName;
-        return Task.FromResult(new SourceResult(destPath, projectName, IsTemporary: true));
+            CloneOptions cloneOptions = new CloneOptions { RecurseSubmodules = false };
+            Repository.Clone(source, destPath, cloneOptions);
+            string projectName = string.IsNullOrWhiteSpace(options.ProjectName) ? repoName : options.ProjectName;
+            return new SourceResult(destPath, projectName, IsTemporary: true);
+        }, ct);
     }
 
     private static string InferRepoName(string url)

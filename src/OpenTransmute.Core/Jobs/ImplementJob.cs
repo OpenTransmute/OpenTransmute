@@ -7,36 +7,21 @@ namespace OpenTransmute.Jobs;
 /// the selected LLM backend to produce working code.
 /// Raises <see cref="OnChanged"/> after any mutation to drive UI updates.
 /// </summary>
-public class ImplementJob
+public class ImplementJob : JobBase
 {
-    #region Properties
+    #region Constructor
 
-    public Guid Id { get; } = Guid.NewGuid();
-    public ImplementOptions Options { get; init; } = null!;
-    public JobStatus Status { get; set; } = JobStatus.Pending;
-    public DateTime CreatedAt { get; } = DateTime.UtcNow;
-    public DateTime? StartedAt { get; set; }
-    public DateTime? CompletedAt { get; set; }
-    public string? ErrorMessage { get; set; }
-    public List<string> LogLines { get; } = new();
+    /// <summary>New job with a fresh ID.</summary>
+    public ImplementJob() { }
 
-    public TimeSpan? TotalElapsed => StartedAt.HasValue
-        ? (CompletedAt ?? DateTime.UtcNow) - StartedAt.Value
-        : null;
+    /// <summary>Restored job with a known ID (loaded from persistence).</summary>
+    public ImplementJob(Guid id) : base(id) { }
 
     #endregion
 
-    #region Methods
+    #region Properties
 
-    public event Action? OnChanged;
-
-    public void NotifyChanged() => OnChanged?.Invoke();
-
-    public void AppendLog(string line)
-    {
-        LogLines.Add(line);
-        NotifyChanged();
-    }
+    public ImplementOptions Options { get; init; } = null!;
 
     #endregion
 }

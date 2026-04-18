@@ -2,7 +2,6 @@ using System.CommandLine;
 using Microsoft.Extensions.DependencyInjection;
 using OpenTransmute.Jobs;
 using OpenTransmute.Models;
-using OpenTransmute.Orchestrator.Contracts;
 
 namespace OpenTransmute.Cli.Commands;
 
@@ -99,8 +98,9 @@ internal static class ImplementCommand
 
             job.OnChanged += () =>
             {
-                while (logCursor < job.LogLines.Count)
-                    Console.WriteLine(job.LogLines[logCursor++]);
+                string[] snapshot = job.GetLogSnapshot();
+                while (logCursor < snapshot.Length)
+                    Console.WriteLine(snapshot[logCursor++]);
                 if (job.Status is JobStatus.Completed or JobStatus.Failed)
                     done.TrySetResult();
             };

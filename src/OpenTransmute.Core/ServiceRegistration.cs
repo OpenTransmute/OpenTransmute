@@ -6,12 +6,10 @@ using OpenTransmute.Filtering;
 using OpenTransmute.Inventory;
 using OpenTransmute.Jobs;
 using OpenTransmute.Llm;
-using OpenTransmute.Orchestrator.Contracts;
-using OpenTransmute.Orchestrator.Orchestration;
-using OpenTransmute.Orchestrator.Output;
-using OpenTransmute.Orchestrator.Parsing;
-using OpenTransmute.Orchestrator.Retry;
-using OpenTransmute.Phases;
+using OpenTransmute.Models;
+using OpenTransmute.Orchestration;
+using OpenTransmute.Writing;
+using OpenTransmute.Parsing;
 using OpenTransmute.Source;
 
 namespace OpenTransmute;
@@ -41,43 +39,29 @@ public static class ServiceRegistration
         services.AddSingleton<JobQueue>();
         services.AddSingleton<JobPersistenceService>();
         services.AddSingleton<ComposeJobPersistenceService>();
+        services.AddSingleton<ImplementJobPersistenceService>();
         services.AddHostedService<JobRunner>();
 
         // Source fetchers
         services.AddSingleton<ISourceFetcher, LocalSourceFetcher>();
         services.AddSingleton<ISourceFetcher, GitSourceFetcher>();
 
-        // Decompose orchestration — shared services
+        // LLM executor implementations — all registered; JobOrchestrator selects by OrchestratorType
+        services.AddSingleton<ILlmExecutor, ClaudeSubprocessExecutor>();
+        services.AddSingleton<ILlmExecutor>(sp =>
+            new OpenAiChatExecutor(
+                sp.GetRequiredService<ILogger<OpenAiChatExecutor>>(),
+                OrchestratorType.OpenAI));
+        services.AddSingleton<ILlmExecutor>(sp =>
+            new OpenAiChatExecutor(
+                sp.GetRequiredService<ILogger<OpenAiChatExecutor>>(),
+                OrchestratorType.Ollama));
+
+        // Core orchestration
         services.AddSingleton<PromptTemplates>();
         services.AddSingleton<PromptBuilder>();
         services.AddSingleton<OutputWriter>();
-        services.AddSingleton<OpenTransmute.Orchestrator.Retry.RetryPolicy>();
-
-        // Decompose orchestrators — all registered; JobRunner selects by OrchestratorType
-        services.AddSingleton<IDecomposeOrchestrator, ClaudeOrchestrator>();
-        services.AddSingleton<IDecomposeOrchestrator>(sp =>
-            new OpenAiOrchestrator(
-                sp.GetRequiredService<PromptTemplates>(),
-                sp.GetRequiredService<PromptBuilder>(),
-                sp.GetRequiredService<OutputWriter>(),
-                sp.GetRequiredService<OpenTransmute.Orchestrator.Retry.RetryPolicy>(),
-                sp.GetRequiredService<ILogger<OpenAiOrchestrator>>(),
-                OrchestratorType.OpenAI));
-        services.AddSingleton<IDecomposeOrchestrator>(sp =>
-            new OpenAiOrchestrator(
-                sp.GetRequiredService<PromptTemplates>(),
-                sp.GetRequiredService<PromptBuilder>(),
-                sp.GetRequiredService<OutputWriter>(),
-                sp.GetRequiredService<OpenTransmute.Orchestrator.Retry.RetryPolicy>(),
-                sp.GetRequiredService<ILogger<OpenAiOrchestrator>>(),
-                OrchestratorType.Ollama));
-
-        // Compose / Transmute
-        services.AddSingleton<ClaudeAgentBackend>();
-        services.AddSingleton<OpenAiCompletionBackend>();
-        services.AddSingleton<OpenTransmute.Retry.RetryPolicy>();
-        services.AddSingleton<ComposeOrchestrator>();
-        services.AddSingleton<ImplementOrchestrator>();
+        services.AddSingleton<JobOrchestrator>();
 
         // Supporting services
         services.AddSingleton<SourceFileFilter>();
@@ -105,6 +89,10 @@ public static class ServiceRegistration
 
         ComposeJobPersistenceService composePersistence = services.GetRequiredService<ComposeJobPersistenceService>();
         foreach (ComposeJob job in await composePersistence.LoadAllAsync())
+            jobStore.Add(job);
+
+        ImplementJobPersistenceService implementPersistence = services.GetRequiredService<ImplementJobPersistenceService>();
+        foreach (ImplementJob job in await implementPersistence.LoadAllAsync())
             jobStore.Add(job);
     }
 }

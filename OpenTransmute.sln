@@ -6,8 +6,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenTransmute", "src\OpenTr
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestRig", "src\TestRig\TestRig.csproj", "{F4DDF93E-6AEC-4541-9F04-67CE00714601}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenTransmute.Orchestrator", "src\OpenTransmute.Orchestrator\OpenTransmute.Orchestrator.csproj", "{0E282D78-9267-4AC8-9247-B9B7DD22A1E9}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenTransmute.Core", "src\OpenTransmute.Core\OpenTransmute.Core.csproj", "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenTransmute.Cli", "src\OpenTransmute.Cli\OpenTransmute.Cli.csproj", "{C7D6E5F4-A3B2-1098-7654-32FEDCBA9876}"
@@ -32,10 +30,6 @@ Global
 		{F4DDF93E-6AEC-4541-9F04-67CE00714601}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F4DDF93E-6AEC-4541-9F04-67CE00714601}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F4DDF93E-6AEC-4541-9F04-67CE00714601}.Release|Any CPU.Build.0 = Release|Any CPU
-		{0E282D78-9267-4AC8-9247-B9B7DD22A1E9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{0E282D78-9267-4AC8-9247-B9B7DD22A1E9}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{0E282D78-9267-4AC8-9247-B9B7DD22A1E9}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{0E282D78-9267-4AC8-9247-B9B7DD22A1E9}.Release|Any CPU.Build.0 = Release|Any CPU
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|Any CPU.ActiveCfg = Release|Any CPU

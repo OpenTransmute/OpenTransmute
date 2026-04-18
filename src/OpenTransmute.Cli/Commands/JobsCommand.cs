@@ -128,11 +128,12 @@ internal static class JobsCommand
         if (!string.IsNullOrWhiteSpace(job.ErrorMessage))
             Console.WriteLine($"Error:    {job.ErrorMessage}");
 
-        if (job.LogLines.Any())
+        string[] logSnapshot = job.GetLogSnapshot();
+        if (logSnapshot.Length > 0)
         {
             Console.WriteLine();
             Console.WriteLine("Log:");
-            foreach (var line in job.LogLines)
+            foreach (string line in logSnapshot)
                 Console.WriteLine($"  {line}");
         }
 

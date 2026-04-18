@@ -2,7 +2,7 @@ using System.ClientModel;
 using System.ClientModel.Primitives;
 using Microsoft.Extensions.AI;
 using OpenAI;
-using OpenTransmute.Orchestrator.Plugins;
+using OpenTransmute.Plugins;
 
 internal static class Program
 {
