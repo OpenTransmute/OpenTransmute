@@ -9,7 +9,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\OpenTransmute.Core\OpenTransmute.Core.csproj" />
-    <ProjectReference Include="..\OpenTransmute.Orchestrator\OpenTransmute.Orchestrator.csproj" />
   </ItemGroup>
 
   <ItemGroup>

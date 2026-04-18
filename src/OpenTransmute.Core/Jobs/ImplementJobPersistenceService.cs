@@ -5,34 +5,29 @@ using OpenTransmute.Models;
 
 namespace OpenTransmute.Jobs;
 
-/// <summary>
-/// Saves and loads ComposeJob state from the database so history survives restarts.
-/// </summary>
-public class ComposeJobPersistenceService(IDbContextFactory<AppDbContext> dbFactory, ILogger<ComposeJobPersistenceService> logger)
+public class ImplementJobPersistenceService(IDbContextFactory<AppDbContext> dbFactory, ILogger<ImplementJobPersistenceService> logger)
+    : IJobPersistenceService<ImplementJob>
 {
-    public async Task SaveAsync(ComposeJob job, CancellationToken ct = default)
+    public async Task SaveAsync(ImplementJob job, CancellationToken ct = default)
     {
         try
         {
             await using AppDbContext db = await dbFactory.CreateDbContextAsync(ct);
-
-            SavedComposeJob? existing = await db.ComposeJobs.FindAsync([job.Id], ct);
-
+            SavedImplementJob? existing = await db.ImplementJobs.FindAsync([job.Id], ct);
             string logJson = JsonSerializer.Serialize(job.GetLogSnapshot());
 
             if (existing is null)
             {
-                db.ComposeJobs.Add(new SavedComposeJob
+                db.ImplementJobs.Add(new SavedImplementJob
                 {
                     Id               = job.Id,
-                    OutputName       = job.Options.OutputName,
-                    SourceLabel      = job.Options.SourceLabel,
+                    Label            = job.Options.Label ?? job.Options.ProjectName,
+                    OutputDirectory  = job.Options.OutputDirectory,
                     Status           = (int)job.Status,
                     CreatedAt        = job.CreatedAt,
                     StartedAt        = job.StartedAt,
                     CompletedAt      = job.CompletedAt,
                     ErrorMessage     = job.ErrorMessage,
-                    Output           = job.Output,
                     OrchestratorType = job.Options.Orchestrator.ToString(),
                     Model            = job.Options.Model,
                     LogLinesJson     = logJson,
@@ -40,67 +35,49 @@ public class ComposeJobPersistenceService(IDbContextFactory<AppDbContext> dbFact
             }
             else
             {
-                existing.Status          = (int)job.Status;
-                existing.StartedAt       = job.StartedAt;
-                existing.CompletedAt     = job.CompletedAt;
-                existing.ErrorMessage    = job.ErrorMessage;
-                existing.Output          = job.Output;
-                existing.LogLinesJson    = logJson;
+                existing.Status       = (int)job.Status;
+                existing.StartedAt    = job.StartedAt;
+                existing.CompletedAt  = job.CompletedAt;
+                existing.ErrorMessage = job.ErrorMessage;
+                existing.LogLinesJson = logJson;
             }
 
             await db.SaveChangesAsync(ct);
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Failed to save compose job {Id}", job.Id);
+            logger.LogWarning(ex, "Failed to save implement job {Id}", job.Id);
         }
     }
 
-    public async Task UpdateOutputAsync(Guid id, string output, CancellationToken ct = default)
+    public async Task<List<ImplementJob>> LoadAllAsync(CancellationToken ct = default)
     {
         try
         {
             await using AppDbContext db = await dbFactory.CreateDbContextAsync(ct);
-            SavedComposeJob? record = await db.ComposeJobs.FindAsync([id], ct);
-            if (record is null) return;
-            record.Output = output;
-            await db.SaveChangesAsync(ct);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to update output for compose job {Id}", id);
-        }
-    }
-
-    public async Task<List<ComposeJob>> LoadAllAsync(CancellationToken ct = default)
-    {
-        try
-        {
-            await using AppDbContext db = await dbFactory.CreateDbContextAsync(ct);
-            List<SavedComposeJob> records = await db.ComposeJobs
+            List<SavedImplementJob> records = await db.ImplementJobs
                 .OrderByDescending(j => j.CreatedAt)
                 .ToListAsync(ct);
 
             return records.Select(r =>
             {
-                var options = new Models.ComposeOptions
+                var options = new ImplementOptions
                 {
-                    OutputName  = r.OutputName,
-                    SourceLabel = r.SourceLabel,
-                    Model       = r.Model,
+                    Label           = r.Label,
+                    OutputDirectory = r.OutputDirectory,
+                    Model           = r.Model,
                 };
 
                 if (Enum.TryParse<OrchestratorType>(r.OrchestratorType, out OrchestratorType orch))
                     options.Orchestrator = orch;
 
-                var job = new ComposeJob(r.Id)
+                var job = new ImplementJob(r.Id)
                 {
                     Options      = options,
                     Status       = (JobStatus)r.Status,
                     StartedAt    = r.StartedAt,
                     CompletedAt  = r.CompletedAt,
                     ErrorMessage = r.ErrorMessage,
-                    Output       = r.Output,
                 };
 
                 List<string>? lines = JsonSerializer.Deserialize<List<string>>(r.LogLinesJson);
@@ -113,7 +90,7 @@ public class ComposeJobPersistenceService(IDbContextFactory<AppDbContext> dbFact
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Failed to load compose jobs");
+            logger.LogWarning(ex, "Failed to load implement jobs");
             return [];
         }
     }

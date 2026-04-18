@@ -4,8 +4,8 @@
 @inject LlmSettingsService LlmSettings
 @inject NavigationManager Nav
 @inject ISnackbar Snackbar
-@inject OpenTransmute.Orchestrator.Parsing.PromptTemplates PromptTemplates
-@inject OpenTransmute.Orchestrator.Parsing.PromptBuilder PromptBuilder
+@inject OpenTransmute.Parsing.PromptTemplates PromptTemplates
+@inject OpenTransmute.Parsing.PromptBuilder PromptBuilder
 @namespace OpenTransmute.Components.Pages
 
 <PageTitle>Compose — OpenTransmute</PageTitle>
@@ -214,7 +214,7 @@
             OpenAiEndpoint     = string.IsNullOrWhiteSpace(LlmSettings.OpenAiEndpoint) ? null : LlmSettings.OpenAiEndpoint,
             OutputRoot         = Directory.GetCurrentDirectory(),
             TimeoutMinutes     = LlmSettings.TimeoutMinutes,
-            UserEthos          = string.IsNullOrWhiteSpace(LlmSettings.UserEthos) ? null : LlmSettings.UserEthos
+            Hints              = string.IsNullOrWhiteSpace(LlmSettings.UserEthos) ? null : LlmSettings.UserEthos
         };
 
         var job = new ComposeJob { Options = options };

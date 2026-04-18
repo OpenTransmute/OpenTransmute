@@ -1,7 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using OpenTransmute.Data;
 using OpenTransmute.Models;
-using OpenTransmute.Orchestrator.Contracts;
 
 namespace OpenTransmute.Services;
 

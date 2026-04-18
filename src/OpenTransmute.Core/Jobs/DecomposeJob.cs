@@ -1,8 +1,8 @@
 using OpenTransmute.Models;
-using OpenTransmute.Orchestrator.Contracts;
 
 namespace OpenTransmute.Jobs;
 
+/// <summary>Job status shared by all job types.</summary>
 public enum JobStatus { Pending, Running, Completed, Failed }
 
 /// <summary>
@@ -33,13 +33,9 @@ public class PhaseProgress
 /// accumulated token usage, and the real-time log buffer.
 /// Raises <see cref="OnChanged"/> after any state mutation to drive UI updates.
 /// </summary>
-public class DecomposeJob
+public class DecomposeJob : JobBase
 {
     #region Members
-
-    private const int MaxLogLines = 2000;
-    private readonly object _logLock = new();
-    private readonly List<string> _logLines = new List<string>();
 
     // Phase names mirror the decompose.md section titles
     private static readonly string[] PhaseNames =
@@ -62,53 +58,30 @@ public class DecomposeJob
     public DecomposeJob() { }
 
     /// <summary>Restored job with a known ID (loaded from disk).</summary>
-    internal DecomposeJob(Guid id) { Id = id; }
+    internal DecomposeJob(Guid id) : base(id) { }
 
     #endregion
 
     #region Properties
 
-    public Guid Id { get; } = Guid.NewGuid();
     public DecomposeOptions Options { get; init; } = null!;
-    public JobStatus Status { get; set; } = JobStatus.Pending;
-    public DateTime CreatedAt { get; } = DateTime.UtcNow;
-    public DateTime? StartedAt { get; set; }
-    public DateTime? CompletedAt { get; set; }
-    public string? ErrorMessage { get; set; }
 
-    /// <summary>Accumulated token usage across all phases. Updated as phases complete.</summary>
-    public TokenUsage TotalTokens { get; set; } = TokenUsage.Zero;
+    /// <summary>
+    /// Local filesystem path after source fetching.
+    /// Set by JobRunner before RunAsync is called.
+    /// </summary>
+    public string? LocalSourcePath { get; set; }
 
     public PhaseProgress[] Phases { get; } = Enumerable.Range(0, 8)
         .Select(i => new PhaseProgress { PhaseNumber = i, PhaseName = PhaseNames[i] })
         .ToArray();
 
-    /// <summary>Returns a point-in-time snapshot of log lines safe to iterate on any thread.</summary>
-    public string[] GetLogSnapshot() { lock (_logLock) { return [.. _logLines]; } }
-
-    public TimeSpan? TotalElapsed => StartedAt.HasValue
-        ? (CompletedAt ?? DateTime.UtcNow) - StartedAt.Value
-        : null;
-
     #endregion
 
     #region Methods
 
-    public event Action? OnChanged;
-
-    public void NotifyChanged() => OnChanged?.Invoke();
-
-    public void AppendLog(string line)
-    {
-        lock (_logLock)
-        {
-            _logLines.Add(line);
-            if (_logLines.Count > MaxLogLines)
-                _logLines.RemoveAt(0);
-        }
-        NotifyChanged();
-    }
-
+    /// <summary>Marks the given phase as running and records its start time.</summary>
+    /// <param name="phase">Zero-based phase index.</param>
     public void PhaseStarted(int phase)
     {
         Phases[phase].Status = JobStatus.Running;
@@ -116,6 +89,10 @@ public class DecomposeJob
         NotifyChanged();
     }
 
+    /// <summary>Marks the given phase as completed, recording token usage and an output preview.</summary>
+    /// <param name="phase">Zero-based phase index.</param>
+    /// <param name="outputPreview">Optional preview of the phase output (truncated to 500 chars).</param>
+    /// <param name="tokens">Token usage for this phase, added to <see cref="JobBase.TotalTokens"/>.</param>
     public void PhaseCompleted(int phase, string? outputPreview, TokenUsage tokens)
     {
         Phases[phase].Status = JobStatus.Completed;
@@ -127,6 +104,9 @@ public class DecomposeJob
         NotifyChanged();
     }
 
+    /// <summary>Marks the given phase as failed and records the error message.</summary>
+    /// <param name="phase">Zero-based phase index.</param>
+    /// <param name="error">The error message describing the failure.</param>
     public void PhaseFailed(int phase, string error)
     {
         Phases[phase].Status = JobStatus.Failed;

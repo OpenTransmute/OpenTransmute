@@ -35,7 +35,7 @@
 <!-- Log -->
 <MudText Typo="Typo.subtitle2" Class="mb-1">Log</MudText>
 <MudPaper Elevation="1" Class="pa-3 mb-4" Style="max-height:300px;overflow-y:auto;background:#1e1e1e">
-    @foreach (var line in _job.LogLines)
+    @foreach (string line in _job.GetLogSnapshot())
     {
         <div style="color:#d4d4d4;font-family:monospace;font-size:0.75rem;white-space:pre-wrap">@line</div>
     }

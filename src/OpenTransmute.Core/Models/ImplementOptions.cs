@@ -1,5 +1,3 @@
-using OpenTransmute.Orchestrator.Contracts;
-
 namespace OpenTransmute.Models;
 
 public class ImplementOptions
@@ -29,4 +27,7 @@ public class ImplementOptions
 
     /// <summary>HTTP timeout for direct completion backends. Default 60 minutes.</summary>
     public int TimeoutMinutes { get; set; } = 60;
+
+    /// <summary>Optional user coding hints injected into the implementation prompt.</summary>
+    public string? Hints { get; set; }
 }

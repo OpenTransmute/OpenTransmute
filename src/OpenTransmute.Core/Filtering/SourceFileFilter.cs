@@ -1,6 +1,5 @@
 using System.Buffers;
-using Microsoft.Extensions.Logging;
-using OpenTransmute.Orchestrator.Filtering;
+using OpenTransmute.Filtering;
 
 namespace OpenTransmute.Filtering;
 

@@ -1,5 +1,4 @@
 using System.Text.Json.Serialization;
-using OpenTransmute.Orchestrator.Contracts;
 
 namespace OpenTransmute.Models;
 
@@ -60,10 +59,10 @@ public class ComposeOptions
     public int TimeoutMinutes { get; set; } = 10;
 
     /// <summary>
-    /// User's personal composition ethos — coding style, naming conventions, error handling philosophy,
+    /// User's personal coding standards, naming conventions, error handling philosophy,
     /// testing requirements, etc. Injected as a top-level authoritative instruction in the compose prompt.
     /// </summary>
-    public string? UserEthos { get; set; }
+    public string? Hints { get; set; }
 
     #endregion
 }

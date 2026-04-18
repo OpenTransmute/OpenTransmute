@@ -16,6 +16,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<InventoryItem> InventoryItems => Set<InventoryItem>();
     public DbSet<DecomposePhaseOutput> PhaseOutputs => Set<DecomposePhaseOutput>();
     public DbSet<SavedComposeJob> ComposeJobs => Set<SavedComposeJob>();
+    public DbSet<SavedImplementJob> ImplementJobs => Set<SavedImplementJob>();
     public DbSet<UserSettings> UserSettings => Set<UserSettings>();
 
     #endregion
@@ -64,6 +65,15 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
              .WithMany(p => p.PhaseOutputs)
              .HasForeignKey(o => o.ProjectId)
              .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<SavedImplementJob>(e =>
+        {
+            e.HasKey(j => j.Id);
+            e.Property(j => j.Label).IsRequired();
+            e.Property(j => j.OutputDirectory).IsRequired();
+            e.Property(j => j.OrchestratorType).IsRequired();
+            e.Property(j => j.LogLinesJson).IsRequired();
         });
 
         modelBuilder.Entity<UserSettings>(e =>
