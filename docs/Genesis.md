@@ -96,22 +96,35 @@ What the pipeline transforms is not the code. It is the understanding embedded i
 
 ```mermaid
 flowchart LR
-    subgraph IN["Source (C · POSIX)"]
-        A[cmark<br/>Reference Implementation]
-    end
 
-    subgraph TRANSFORM["Transformation"]
-        B[Decompose<br/>Extract Blueprint]
-        C[Inventory<br/>Algorithms · Patterns · Behaviors · Invariants]
-        D[Compose<br/>Spec with Intent]
+    %% --- Light-on-dark safe classes -----------------------------------
+    classDef groupTitle fill:#e2e8f0,stroke:#cbd5e1,color:#0f172a;
+    classDef block fill:#f8fafc,stroke:#cbd5e1,color:#0f172a;
+    classDef process fill:#eef2ff,stroke:#6366f1,color:#1e1b4b;
+    classDef io fill:#fff7ed,stroke:#f59e0b,color:#7c2d12;
+
+    %% --- Groups --------------------------------------------------------
+    subgraph IN["📥 Source · C / POSIX"]
+        A["cmark<br/>Reference Implementation"]:::io
+    end
+    class IN groupTitle
+
+    subgraph TRANSFORM["🔧 Transformation Pipeline"]
+        B["Decompose<br/>Extract Blueprint"]:::process
+        C["Inventory<br/>Algorithms · Patterns · Behaviors · Invariants"]:::process
+        D["Compose<br/>Spec with Intent"]:::process
         B --> C --> D
     end
+    class TRANSFORM groupTitle
 
-    subgraph OUT["Output (C# · .NET)"]
-        E[CommonMark Library<br/>CLI · Test Suite]
+    subgraph OUT["📤 Output · C# / .NET"]
+        E["CommonMark Library<br/>CLI · Test Suite"]:::io
     end
+    class OUT groupTitle
 
-    IN --> TRANSFORM --> OUT
+    %% --- Flow ----------------------------------------------------------
+    A --> B
+    D --> E
 ```
 
 First run: **151 of 652 tests passing.** That is not great. But the test suite was in the project, so I could iterate without losing ground. I would fix a block of failures, rerun, and confirm nothing regressed. After some targeted fixes: 284. Then 297. Then more. Within two and a half hours of iteration, all 652 tests were passing with a runtime of 48 milliseconds. That was impressive, until I found out the model had been cheating.
