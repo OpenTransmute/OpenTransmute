@@ -174,7 +174,7 @@ otx decompose https://github.com/org/repo --project my-project --start-phase 4
 
 ### Adding new phases
 
-Phases are entirely data-driven. Add a new `## Phase N — Title` section to `src/OpenTransmute.Orchestrator/Prompts/decompose.md` with:
+Phases are entirely data-driven. Add a new `## Phase N — Title` section to `src/OpenTransmute.Core/Prompts/decompose.md` with:
 
 - `**Goal:**` — what the phase produces
 - `**Model Weight:**` — `thick`, `normal`, or `thin`

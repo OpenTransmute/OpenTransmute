@@ -14,7 +14,7 @@ nav_order: 5
 {:toc}
 </details>
 
-OpenTransmute's prompt logic lives in Markdown files embedded as resources in the `OpenTransmute.Orchestrator` assembly. Customising them requires only editing a `.md` file and rebuilding.
+OpenTransmute's prompt logic lives in Markdown files embedded as resources in the `OpenTransmute.Core` assembly. Customising them requires only editing a `.md` file and rebuilding.
 
 ---
 
@@ -22,15 +22,15 @@ OpenTransmute's prompt logic lives in Markdown files embedded as resources in th
 
 | File | Used by | Purpose |
 |---|---|---|
-| `src/OpenTransmute.Orchestrator/Prompts/decompose.md` | Decompose pipeline | Defines all eight phases, their goals, model weights, prior context, and prompt text |
-| `src/OpenTransmute.Orchestrator/Prompts/compose.md` | Compose pipeline | Composition and architectural synthesis prompt |
-| `src/OpenTransmute.Orchestrator/Prompts/transmute.md` | Transmute and Implement pipelines | Standing guards and rules for all agentic code generation |
+| `src/OpenTransmute.Core/Prompts/decompose.md` | Decompose pipeline | Defines all eight phases, their goals, model weights, prior context, and prompt text |
+| `src/OpenTransmute.Core/Prompts/compose.md` | Compose pipeline | Composition and architectural synthesis prompt |
+| `src/OpenTransmute.Core/Prompts/transmute.md` | Transmute and Implement pipelines | Standing guards and rules for all agentic code generation |
 
 ---
 
 ## Substitution Tokens
 
-`PromptBuilder` in `OpenTransmute.Orchestrator.Parsing` resolves these tokens at runtime before sending the prompt to the AI:
+`PromptBuilder` in `OpenTransmute.Parsing` resolves these tokens at runtime before sending the prompt to the AI:
 
 | Token | Resolved to |
 |---|---|
@@ -92,12 +92,12 @@ The `**Expansion Discovery:**` marker is what the orchestrator detects to identi
 
 ## Adding a New Phase
 
-1. Open `src/OpenTransmute.Orchestrator/Prompts/decompose.md`.
+1. Open `src/OpenTransmute.Core/Prompts/decompose.md`.
 2. Add a new `## Phase N — Title` section following the conventions above.
 3. Rebuild:
 
 ```bash
-cd src/OpenTransmute.Orchestrator
+cd src/OpenTransmute.Core
 dotnet build
 ```
 

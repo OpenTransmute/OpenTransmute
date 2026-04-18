@@ -17,20 +17,21 @@ nav_order: 7
 
 ## Adding a New AI Backend
 
-OpenTransmute has two backend interfaces depending on which pipeline you're extending.
+All pipelines (Decompose, Compose, Implement, Transmute) share a single backend abstraction: `ILlmExecutor` in `OpenTransmute.Llm`. The `JobOrchestrator` selects the right executor at runtime by matching `OrchestratorType`.
 
-### Decompose backend (`IDecomposeOrchestrator`)
-
-Implement `IDecomposeOrchestrator` from `OpenTransmute.Orchestrator.Contracts`:
+### Implement `ILlmExecutor`
 
 ```csharp
-public class MyDecomposeOrchestrator : IDecomposeOrchestrator
+public class MyExecutor : ILlmExecutor
 {
-    public OrchestratorType Type => OrchestratorType.OpenAI; // reuse or extend the enum
+    public OrchestratorType BackendType => OrchestratorType.OpenAI; // reuse or extend the enum
 
-    public IAsyncEnumerable<PhaseEvent> RunAsync(DecomposeRequest request, CancellationToken ct)
+    public async IAsyncEnumerable<LlmOutputEvent> ExecuteAsync(
+        LlmExecutionContext ctx,
+        [EnumeratorCancellation] CancellationToken ct)
     {
-        // yield PhaseStarted, LogLine, PhaseCompleted, PhaseFailed, etc.
+        // yield LlmLine events as output arrives
+        // yield LlmCompleted or LlmFailed as the final event
     }
 }
 ```
@@ -38,41 +39,19 @@ public class MyDecomposeOrchestrator : IDecomposeOrchestrator
 Register it in `ServiceRegistration.cs` inside `AddOpenTransmuteCore`:
 
 ```csharp
-services.AddSingleton<IDecomposeOrchestrator, MyDecomposeOrchestrator>();
+services.AddSingleton<ILlmExecutor, MyExecutor>();
 ```
 
-### Compose / Implement backend (`ILlmBackend`)
-
-Implement `ILlmBackend` from `OpenTransmute.Core.Llm`:
-
-```csharp
-public class MyLlmBackend : ILlmBackend
-{
-    public Task<string> CompleteAsync(LlmRequest request, CancellationToken ct)
-    {
-        // call your provider, return the completed text
-    }
-}
-```
-
-Register it in `ServiceRegistration.cs`:
-
-```csharp
-services.AddSingleton<MyLlmBackend>();
-```
-
-Then add a selection option in `Components/Pages/Compose.razor` (web app) and/or the relevant CLI command handler.
+Then add a selection option in `Components/Pages/Decompose.razor` (web app) and/or the relevant CLI command handler.
 
 ### Error signalling
 
-Throw these exceptions so the retry policy handles them correctly:
+Deliver failures as a terminal `LlmFailed` event rather than throwing. The retry logic in `OpenTransmute.Retry` intercepts these and applies:
 
-| Exception | When to throw |
+| Failure kind | Strategy |
 |---|---|
-| `LlmRateLimitException` | HTTP 429 or equivalent rate limit response |
-| `LlmContextTooLargeException` | Context window exceeded |
-
-The `RetryPolicy` in `OpenTransmute.Retry` handles both with backoff and context-reduction strategies.
+| Rate limit (HTTP 429) | Exponential backoff (5 s → 20 s → 60 s → 120 s) |
+| Context window exceeded | Reduces prior-context and retries once |
 
 ---
 
@@ -106,7 +85,7 @@ The `RetryPolicy` in `OpenTransmute.Retry` handles both with backoff and context
 
 Phases are entirely data-driven. No code changes are required.
 
-1. Open `src/OpenTransmute.Orchestrator/Prompts/decompose.md`.
+1. Open `src/OpenTransmute.Core/Prompts/decompose.md`.
 2. Add a new `## Phase N — Title` section:
 
    ```markdown
@@ -122,7 +101,7 @@ Phases are entirely data-driven. No code changes are required.
    ` ` `
    ```
 
-3. Rebuild: `dotnet build src/OpenTransmute.Orchestrator`
+3. Rebuild: `dotnet build src/OpenTransmute.Core`
 
 For expansion phases (discovery → per-item template), include:
 
@@ -145,21 +124,21 @@ src/
 │   ├── CliSettings.cs              Persisted CLI settings
 │   └── Commands/                  One file per command
 ├── OpenTransmute.Core/             All business logic, shared by CLI + web
-│   ├── Jobs/                      DecomposeJob, ComposeJob, ImplementJob, JobRunner
-│   ├── Models/                    DecomposeOptions, ComposeOptions, ImplementOptions
-│   ├── Phases/                    ComposeOrchestrator, ImplementOrchestrator
-│   ├── Llm/                       ILlmBackend implementations
-│   ├── Inventory/                 InventoryParser, InventoryExporter, SectionParsers
+│   ├── Data/                      AppDbContext, EF Core migrations
 │   ├── Filtering/                 SourceFileFilter, .transmuteignore support
-│   ├── Source/                    GitSourceFetcher, LocalSourceFetcher
+│   ├── Inventory/                 InventoryParser, InventoryExporter, SectionParsers
+│   ├── Jobs/                      DecomposeJob, ComposeJob, ImplementJob, JobRunner
+│   ├── Llm/                       ILlmExecutor, ClaudeSubprocessExecutor, OpenAiChatExecutor
+│   ├── Models/                    OrchestratorType, DecomposeOptions, ComposeOptions, etc.
+│   ├── Orchestration/             JobOrchestrator, PhaseEvent, RunContext
+│   ├── Parsing/                   PromptBuilder, PromptTemplates
+│   ├── Phases/                    Phase orchestration helpers
+│   ├── Plugins/                   FileSystemPlugin (LLM agent file access)
+│   ├── Prompts/                   decompose.md, compose.md, transmute.md (embedded resources)
 │   ├── Retry/                     RetryPolicy for rate limits and context overflow
-│   └── Data/                      AppDbContext, EF Core migrations
-├── OpenTransmute.Orchestrator/     Decompose orchestration
-│   ├── Contracts/                 IDecomposeOrchestrator, PhaseEvent, OrchestratorType
-│   ├── Orchestration/             ClaudeOrchestrator, OpenAiOrchestrator
-│   ├── Prompts/                   decompose.md, compose.md, transmute.md
-│   ├── Parsing/                   PromptBuilder, substitution token resolution
-│   └── Model/                     ModelProfile, ModelRegistry, PhaseSpec
+│   ├── Source/                    GitSourceFetcher, LocalSourceFetcher
+│   ├── Writing/                   OutputWriter
+│   └── ServiceRegistration.cs     DI registration for all services
 └── OpenTransmute/                  Blazor Server web app
     ├── Program.cs
     ├── Components/Pages/           Decompose, Compose, Transmute, Implement, Inventory, etc.
