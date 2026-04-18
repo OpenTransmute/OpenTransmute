@@ -1,0 +1,138 @@
+@page "/"
+@namespace OpenTransmute.Components.Pages
+
+<PageTitle>OpenTransmute</PageTitle>
+
+<!-- Hero ──────────────────────────────────────────────────────────────────── -->
+<div class="ot-hero">
+    <img src="/images/logo-icon.png" alt="OpenTransmute"
+         style="height:56px;width:56px;object-fit:contain;margin-bottom:10px" />
+
+    <MudText Typo="Typo.h4" Align="Align.Center" Style="font-weight:700;max-width:640px">
+        Understand any codebase.<br />Re-implement anything, anywhere.
+    </MudText>
+
+    <MudText Typo="Typo.body1" Align="Align.Center" Class="mud-text-secondary mt-2"
+             Style="max-width:540px;line-height:1.6">
+        OpenTransmute uses AI to decompose codebases into language-agnostic blueprints,
+        accumulates reusable building blocks, and synthesises new implementations on demand.
+    </MudText>
+
+    <MudStack Row="true" Spacing="2" Class="mt-4" Justify="Justify.Center">
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+                   StartIcon="@Icons.Material.Filled.RocketLaunch" Href="/decompose">
+            Decompose a Codebase
+        </MudButton>
+        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Large"
+                   StartIcon="@Icons.Material.Filled.AutoAwesome" Href="/compose">
+            Compose Something New
+        </MudButton>
+    </MudStack>
+
+    <!-- Engine badges -->
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mt-3" Justify="Justify.Center"
+              Style="flex-wrap:wrap;gap:8px">
+        <MudText Typo="Typo.caption" Class="mud-text-secondary" Style="margin-right:4px">Powered by</MudText>
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
+                 Icon="@Icons.Material.Filled.AutoAwesome">
+            Claude Code
+        </MudChip>
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Secondary"
+                 Icon="@Icons.Material.Filled.Computer">
+            Ollama
+        </MudChip>
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Tertiary"
+                 Icon="@Icons.Material.Filled.Cloud">
+            OpenAI / Azure
+        </MudChip>
+    </MudStack>
+</div>
+
+<!-- Workflow steps ─────────────────────────────────────────────────────────── -->
+<MudGrid Spacing="2" Class="mt-3 mb-3">
+
+    <MudItem xs="12" sm="4">
+        <MudCard Elevation="2" Class="ot-feature-card">
+            <MudCardContent>
+                <div class="ot-feature-icon-wrap" style="background:rgba(21,101,192,0.1)">
+                    <MudIcon Icon="@Icons.Material.Filled.RocketLaunch"
+                             Style="color:#1565C0;font-size:1.5rem" />
+                </div>
+                <MudText Typo="Typo.h6" Class="mt-3 mb-1">1 · Decompose</MudText>
+                <MudText Typo="Typo.body2" Class="mud-text-secondary" Style="line-height:1.7">
+                    Point OpenTransmute at a Git repository or local folder.
+                    AI agents walk every phase — structure, algorithms, patterns, invariants —
+                    and produce a language-agnostic specification.
+                </MudText>
+            </MudCardContent>
+            <MudCardActions>
+                <MudButton Variant="Variant.Text" Color="Color.Primary"
+                           EndIcon="@Icons.Material.Filled.ArrowForward" Href="/decompose">
+                    Start decomposing
+                </MudButton>
+            </MudCardActions>
+        </MudCard>
+    </MudItem>
+
+    <MudItem xs="12" sm="4">
+        <MudCard Elevation="2" Class="ot-feature-card">
+            <MudCardContent>
+                <div class="ot-feature-icon-wrap" style="background:rgba(0,172,193,0.1)">
+                    <MudIcon Icon="@Icons.Material.Filled.LibraryBooks"
+                             Style="color:#00ACC1;font-size:1.5rem" />
+                </div>
+                <MudText Typo="Typo.h6" Class="mt-3 mb-1">2 · Accumulate</MudText>
+                <MudText Typo="Typo.body2" Class="mud-text-secondary" Style="line-height:1.7">
+                    Extracted algorithms, design patterns, architectural primitives, and key
+                    abstractions are stored in a searchable inventory — ready to mix and match
+                    across any project.
+                </MudText>
+            </MudCardContent>
+            <MudCardActions>
+                <MudButton Variant="Variant.Text" Color="Color.Secondary"
+                           EndIcon="@Icons.Material.Filled.ArrowForward" Href="/inventory">
+                    Browse inventory
+                </MudButton>
+            </MudCardActions>
+        </MudCard>
+    </MudItem>
+
+    <MudItem xs="12" sm="4">
+        <MudCard Elevation="2" Class="ot-feature-card">
+            <MudCardContent>
+                <div class="ot-feature-icon-wrap" style="background:rgba(126,87,194,0.1)">
+                    <MudIcon Icon="@Icons.Material.Filled.AutoAwesome"
+                             Style="color:#7E57C2;font-size:1.5rem" />
+                </div>
+                <MudText Typo="Typo.h6" Class="mt-3 mb-1">3 · Compose</MudText>
+                <MudText Typo="Typo.body2" Class="mud-text-secondary" Style="line-height:1.7">
+                    Select inventory items, describe your target system, and let AI synthesise
+                    a new architecture — in any language, for any environment — grounded in
+                    real patterns from real codebases.
+                </MudText>
+            </MudCardContent>
+            <MudCardActions>
+                <MudButton Variant="Variant.Text" Color="Color.Tertiary"
+                           EndIcon="@Icons.Material.Filled.ArrowForward" Href="/compose">
+                    Start composing
+                </MudButton>
+            </MudCardActions>
+        </MudCard>
+    </MudItem>
+
+</MudGrid>
+
+<!-- Quick status bar ───────────────────────────────────────────────────────── -->
+<MudPaper Elevation="1" Class="ot-status-bar">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="4" Justify="Justify.Center">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+            <MudIcon Icon="@Icons.Material.Filled.Monitor" Size="Size.Small" Color="Color.Primary" />
+            <MudLink Href="/jobs" Typo="Typo.body2">View all jobs</MudLink>
+        </MudStack>
+        <MudDivider Vertical="true" FlexItem="true" />
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+            <MudIcon Icon="@Icons.Material.Filled.Settings" Size="Size.Small" Color="Color.Default" />
+            <MudLink Href="/settings" Typo="Typo.body2">Configure LLM engine</MudLink>
+        </MudStack>
+    </MudStack>
+</MudPaper>

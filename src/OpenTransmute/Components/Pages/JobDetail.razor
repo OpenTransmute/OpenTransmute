@@ -1,0 +1,282 @@
+@page "/jobs/{JobId:guid}"
+@inject JobStore JobStore
+@inject NavigationManager Nav
+@inject JobQueue JobQueue
+@inject IJSRuntime JS
+@implements IDisposable
+@namespace OpenTransmute.Components.Pages
+@using OpenTransmute.Orchestrator.Contracts
+
+<PageTitle>Job — OpenTransmute</PageTitle>
+
+@if (_job is null)
+{
+    <MudText>Job not found.</MudText>
+    return;
+}
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-1">
+    <MudText Typo="Typo.h5">@_job.Options.ProjectName</MudText>
+    <MudChip T="string" Size="Size.Small" Color="@StatusColor(_job.Status)">@_job.Status</MudChip>
+</MudStack>
+<MudText Typo="Typo.body2" Class="mb-4">
+    Source: @_job.Options.Source
+    @if (_job.TotalElapsed.HasValue)
+    {
+        <span> · Elapsed: @_job.TotalElapsed.Value.ToString(@"mm\:ss")</span>
+    }
+</MudText>
+
+<!-- Phase progress cards -->
+<MudGrid Spacing="2" Class="mb-4">
+    @foreach (var phase in _job.Phases)
+    {
+        <MudItem xs="12" sm="6" md="4">
+            <MudCard Elevation="@(phase.Status == JobStatus.Running ? 4 : 1)"
+                     Style="@(phase.Status == JobStatus.Running ? "border: 2px solid #5C6BC0" : "")">
+                <MudCardHeader>
+                    <CardHeaderAvatar>
+                        <MudIcon Icon="@PhaseIcon(phase.Status)"
+                                 Color="@PhaseIconColor(phase.Status)" />
+                    </CardHeaderAvatar>
+                    <CardHeaderContent>
+                        <MudText Typo="Typo.subtitle2">Phase @phase.PhaseNumber</MudText>
+                        <MudText Typo="Typo.caption">@phase.PhaseName</MudText>
+                    </CardHeaderContent>
+                    <CardHeaderActions>
+                        @if (phase.Elapsed.HasValue)
+                        {
+                            <MudText Typo="Typo.caption">@phase.Elapsed.Value.ToString(@"mm\:ss")</MudText>
+                        }
+                    </CardHeaderActions>
+                </MudCardHeader>
+
+                @if (phase.Status == JobStatus.Failed)
+                {
+                    <MudCardContent>
+                        <MudAlert Severity="Severity.Error" Dense="true">@phase.ErrorMessage</MudAlert>
+                    </MudCardContent>
+                }
+                else if (!string.IsNullOrWhiteSpace(phase.OutputPreview))
+                {
+                    <MudCardContent>
+                        <MudExpansionPanel Text="Preview" Dense="true">
+                            <MudText Style="white-space:pre-wrap;font-family:monospace;font-size:0.75rem">
+                                @phase.OutputPreview
+                            </MudText>
+                        </MudExpansionPanel>
+                    </MudCardContent>
+                }
+
+                @if ((phase.Status is JobStatus.Completed or JobStatus.Failed)
+                     && _job.Status is not JobStatus.Running and not JobStatus.Pending)
+                {
+                    <MudCardActions>
+                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.Replay"
+                                   Disabled="_rerunning"
+                                   OnClick="() => RequestRerun(phase.PhaseNumber, phase.PhaseNumber)">
+                            Re-run phase
+                        </MudButton>
+                        <MudButton Size="Size.Small" Variant="Variant.Text"
+                                   StartIcon="@Icons.Material.Filled.FastForward"
+                                   Disabled="_rerunning"
+                                   OnClick="() => RequestRerun(phase.PhaseNumber, null)">
+                            Continue from here
+                        </MudButton>
+                    </MudCardActions>
+                }
+            </MudCard>
+        </MudItem>
+    }
+</MudGrid>
+
+<!-- API key prompt when re-running an OpenAI job whose key wasn't persisted -->
+@if (_pendingRerunPhase.HasValue)
+{
+    <MudAlert Severity="Severity.Warning" Class="mb-4">
+        <MudText Typo="Typo.body2" Class="mb-2">
+            This job used the OpenAI orchestrator. The API key is never saved to disk — enter it to re-run from Phase @_pendingRerunPhase.
+        </MudText>
+        <MudTextField @bind-Value="_rerunApiKey" Label="OpenAI API Key"
+                      InputType="InputType.Password" Variant="Variant.Outlined" Dense="true" />
+        <MudStack Row="true" Class="mt-2" Spacing="2">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Replay"
+                       OnClick="ConfirmRerunAsync"
+                       Disabled="string.IsNullOrWhiteSpace(_rerunApiKey)">
+                Re-run from Phase @_pendingRerunPhase
+            </MudButton>
+            <MudButton Variant="Variant.Text" Size="Size.Small"
+                       OnClick="() => { _pendingRerunPhase = null; _rerunApiKey = string.Empty; _rerunning = false; }">
+                Cancel
+            </MudButton>
+        </MudStack>
+    </MudAlert>
+}
+
+<!-- Live log -->
+<MudText Typo="Typo.subtitle2" Class="mb-1">Live Log</MudText>
+<MudPaper Elevation="1" Class="pa-3" Style="max-height:400px;overflow-y:auto;background:#1e1e1e">
+    @foreach (var line in _job.GetLogSnapshot())
+    {
+        <div style="color:#d4d4d4;font-family:monospace;font-size:0.75rem;white-space:pre-wrap">@line</div>
+    }
+    <div @ref="_logBottom"></div>
+</MudPaper>
+
+@code {
+    [Parameter] public Guid JobId { get; set; }
+
+    private DecomposeJob? _job;
+    private PeriodicTimer? _ticker;
+    private ElementReference _logBottom;
+
+    private Guid _loadedJobId;
+
+    protected override void OnParametersSet()
+    {
+        if (_loadedJobId == JobId) return;
+
+        // Unsubscribe from the previous job and stop its ticker
+        if (_job is not null)
+            _job.OnChanged -= OnJobChanged;
+        _ticker?.Dispose();
+        _ticker = null;
+        _rerunning = false;
+
+        _loadedJobId = JobId;
+        _job = JobStore.GetDecompose(JobId);
+        if (_job is not null)
+            _job.OnChanged += OnJobChanged;
+
+        if (_job?.Status is JobStatus.Running or JobStatus.Pending)
+            _ = TickAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_job?.Status == JobStatus.Running)
+            await JS.InvokeVoidAsync("scrollLogToBottom", _logBottom);
+    }
+
+    private void OnJobChanged()
+    {
+        if (_job?.Status == JobStatus.Running && _ticker is null)
+            _ = TickAsync();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async Task TickAsync()
+    {
+        _ticker = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        try
+        {
+            while (await _ticker.WaitForNextTickAsync())
+            {
+                if (_job?.Status is not JobStatus.Running and not JobStatus.Pending) break;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        finally
+        {
+            _ticker.Dispose();
+            _ticker = null;
+        }
+    }
+
+    private bool _rerunning;
+    private int? _pendingRerunPhase;
+    private int? _pendingRerunEndPhase;
+    private string _rerunApiKey = string.Empty;
+
+    private void RequestRerun(int phase, int? endPhase)
+    {
+        if (_job is null || _rerunning) return;
+        _rerunning = true;
+        // OpenAI key is never persisted — ask for it again if missing
+        if (_job.Options.Orchestrator == OrchestratorType.OpenAI &&
+            string.IsNullOrEmpty(_job.Options.OpenAiApiKey))
+        {
+            _pendingRerunPhase = phase;
+            _pendingRerunEndPhase = endPhase;
+            return;
+        }
+        _ = RerunAsync(phase, endPhase, null);
+    }
+
+    private async Task ConfirmRerunAsync()
+    {
+        if (_pendingRerunPhase is null || _job is null) return;
+        var phase    = _pendingRerunPhase.Value;
+        var endPhase = _pendingRerunEndPhase;
+        var key      = _rerunApiKey;
+        _pendingRerunPhase    = null;
+        _pendingRerunEndPhase = null;
+        _rerunApiKey          = string.Empty;
+        await RerunAsync(phase, endPhase, key);
+    }
+
+    private async Task RerunAsync(int phase, int? endPhase, string? apiKeyOverride)
+    {
+        if (_job is null) { _rerunning = false; return; }
+        var o = _job.Options;
+        var newOptions = new DecomposeOptions
+        {
+            Source                 = o.Source,
+            ProjectName            = o.ProjectName,
+            Orchestrator           = o.Orchestrator,
+            ThickModel             = o.ThickModel,
+            RegularModel           = o.RegularModel,
+            ThinModel              = o.ThinModel,
+            OpenAiApiKey           = apiKeyOverride ?? o.OpenAiApiKey,
+            OpenAiEndpoint         = o.OpenAiEndpoint,
+            StartPhase             = phase,
+            EndPhase               = endPhase,
+            OutputRoot             = o.OutputRoot,
+            MaxOutputTokens        = o.MaxOutputTokens,
+            ThickMaxOutputTokens   = o.ThickMaxOutputTokens,
+            RegularMaxOutputTokens = o.RegularMaxOutputTokens,
+            ThinMaxOutputTokens    = o.ThinMaxOutputTokens,
+            MaxTurns               = o.MaxTurns,
+            TimeoutMinutes         = o.TimeoutMinutes,
+            KeepClone              = o.KeepClone,
+            CloneDirectory         = o.CloneDirectory
+        };
+        var newJob = new DecomposeJob { Options = newOptions };
+        JobStore.Add(newJob);
+        await JobQueue.EnqueueAsync(newJob);
+        Nav.NavigateTo($"/jobs/{newJob.Id}");
+    }
+
+    private static Color StatusColor(JobStatus s) => s switch
+    {
+        JobStatus.Completed => Color.Success,
+        JobStatus.Failed => Color.Error,
+        JobStatus.Running => Color.Info,
+        _ => Color.Default
+    };
+
+    private static string PhaseIcon(JobStatus s) => s switch
+    {
+        JobStatus.Completed => Icons.Material.Filled.CheckCircle,
+        JobStatus.Failed => Icons.Material.Filled.Error,
+        JobStatus.Running => Icons.Material.Filled.HourglassTop,
+        _ => Icons.Material.Filled.RadioButtonUnchecked
+    };
+
+    private static Color PhaseIconColor(JobStatus s) => s switch
+    {
+        JobStatus.Completed => Color.Success,
+        JobStatus.Failed => Color.Error,
+        JobStatus.Running => Color.Primary,
+        _ => Color.Default
+    };
+
+    public void Dispose()
+    {
+        if (_job is not null)
+            _job.OnChanged -= OnJobChanged;
+        _ticker?.Dispose();
+    }
+}

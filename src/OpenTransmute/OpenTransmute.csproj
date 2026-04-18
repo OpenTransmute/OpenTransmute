@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="codeMap\**" />
+    <Content Remove="codeMap\**" />
+    <EmbeddedResource Remove="codeMap\**" />
+    <None Remove="codeMap\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenTransmute.Core\OpenTransmute.Core.csproj" />
+    <ProjectReference Include="..\OpenTransmute.Orchestrator\OpenTransmute.Orchestrator.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MudBlazor" Version="9.2.0" />
+    <PackageReference Include="MudBlazor.Markdown" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Endpoints\" />
+  </ItemGroup>
+
+</Project>

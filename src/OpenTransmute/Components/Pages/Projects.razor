@@ -1,0 +1,283 @@
+@page "/projects"
+@using Microsoft.EntityFrameworkCore
+@using OpenTransmute.Models
+@using OpenTransmute.Inventory
+@inject IDbContextFactory<OpenTransmute.Data.AppDbContext> DbFactory
+@inject NavigationManager Nav
+@inject InventoryParser InventoryParser
+@namespace OpenTransmute.Components.Pages
+
+<PageTitle>Projects — OpenTransmute</PageTitle>
+
+<MudStack Row="false" Spacing="1" Class="mb-6">
+    <MudText Typo="Typo.h5">Decomposed Projects</MudText>
+    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+        All projects that have been decomposed and stored in the database.
+        Select a project to browse its spec files, then transmute it into a new implementation.
+    </MudText>
+</MudStack>
+
+@if (_projects.Count == 0)
+{
+    <MudPaper Elevation="1" Class="pa-8">
+        <MudStack AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.FolderOff" Size="Size.Large" Color="Color.Default" Style="opacity:0.3" />
+            <MudText Typo="Typo.body1" Class="mud-text-secondary">No decomposed projects yet.</MudText>
+            <MudButton Variant="Variant.Outlined" Href="/decompose" StartIcon="@Icons.Material.Filled.RocketLaunch">
+                Run a Decompose
+            </MudButton>
+        </MudStack>
+    </MudPaper>
+}
+else
+{
+    @foreach (var project in _projects)
+    {
+        bool expanded = _expanded.Contains(project.Id);
+        <MudCard Elevation="2" Class="mb-4">
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                        <MudIcon Icon="@Icons.Material.Filled.AccountTree" Color="Color.Primary" />
+                        <MudText Typo="Typo.h6" Style="font-weight:600">@project.Name</MudText>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Default">
+                            @project.PhaseOutputs.Count file(s)
+                        </MudChip>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Secondary">
+                            @project.Items.Count item(s)
+                        </MudChip>
+                    </MudStack>
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary mt-1">
+                        @project.Source &nbsp;·&nbsp; decomposed @project.DecomposedAt.ToLocalTime().ToString("g")
+                    </MudText>
+                </CardHeaderContent>
+                <CardHeaderActions>
+                    <MudStack Row="true" Spacing="1">
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.AutoFixHigh"
+                                   OnClick="@(() => Nav.NavigateTo($"/transmute?project={Uri.EscapeDataString(project.Name)}"))">
+                            Transmute
+                        </MudButton>
+                        <MudIconButton Icon="@Icons.Material.Filled.Sync"
+                                       Size="Size.Small"
+                                       Title="Refresh files from disk into database"
+                                       Disabled="@_refreshing.Contains(project.Id)"
+                                       OnClick="@(() => RefreshProjectFilesAsync(project))" />
+                        <MudIconButton Icon="@(expanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                       Size="Size.Small"
+                                       OnClick="@(() => ToggleExpand(project.Id))" />
+                    </MudStack>
+                </CardHeaderActions>
+            </MudCardHeader>
+
+            @if (expanded)
+            {
+                <MudCardContent>
+                    @if (!project.PhaseOutputs.Any())
+                    {
+                        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                            No phase outputs stored in the database for this project.
+                            Phase outputs are saved when you run a decompose after this update.
+                        </MudText>
+                    }
+                    else
+                    {
+                        <MudExpansionPanels MultiExpansion="true" Elevation="0">
+                            @foreach (var phase in project.PhaseOutputs.OrderBy(p => p.PhaseNumber).ThenBy(p => p.Filename))
+                            {
+                                bool isEditing = _editing.ContainsKey(phase.Id);
+                                <MudExpansionPanel>
+                                    <TitleContent>
+                                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Primary" Style="min-width:32px">
+                                                @phase.PhaseNumber
+                                            </MudChip>
+                                            <MudText Typo="Typo.body2" Style="font-family:monospace">@phase.Filename</MudText>
+                                            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                                @(phase.Content.Length / 1024)KB · @phase.CreatedAt.ToLocalTime().ToString("g")
+                                            </MudText>
+                                            <span @onclick:stopPropagation="true">
+                                                <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                                               Size="Size.Small"
+                                                               Title="Edit file"
+                                                               Color="@(isEditing ? Color.Warning : Color.Default)"
+                                                               OnClick="@(() => ToggleEdit(phase))" />
+                                            </span>
+                                        </MudStack>
+                                    </TitleContent>
+                                    <ChildContent>
+                                        @if (isEditing)
+                                        {
+                                            <MudStack Spacing="2">
+                                                <MudTextField T="string"
+                                                              Value="_editing[phase.Id]"
+                                                              ValueChanged="@(v => _editing[phase.Id] = v)"
+                                                              Lines="24"
+                                                              Style="font-family:monospace;font-size:0.75rem"
+                                                              FullWidth="true"
+                                                              Variant="Variant.Outlined" />
+                                                <MudStack Row="true" Spacing="1">
+                                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                                               StartIcon="@Icons.Material.Filled.Save"
+                                                               Disabled="@_saving.Contains(phase.Id)"
+                                                               OnClick="@(() => SavePhaseOutputAsync(project, phase))">
+                                                        @(_saving.Contains(phase.Id) ? "Saving…" : "Save")
+                                                    </MudButton>
+                                                    <MudButton Variant="Variant.Text" Size="Size.Small"
+                                                               OnClick="@(() => _editing.Remove(phase.Id))">
+                                                        Cancel
+                                                    </MudButton>
+                                                </MudStack>
+                                            </MudStack>
+                                        }
+                                        else
+                                        {
+                                            <MudPaper Elevation="0" Class="pa-3" Style="background:var(--mud-palette-background-grey);border-radius:4px;max-height:400px;overflow-y:auto">
+                                                <MudMarkdown Value="@phase.Content" />
+                                            </MudPaper>
+                                        }
+                                    </ChildContent>
+                                </MudExpansionPanel>
+                            }
+                        </MudExpansionPanels>
+                    }
+                </MudCardContent>
+            }
+        </MudCard>
+    }
+}
+
+@code {
+    private List<OpenTransmute.Models.DecomposedProject> _projects = new();
+    private HashSet<Guid> _expanded = new();
+    private HashSet<Guid> _refreshing = new();
+    private Dictionary<Guid, string> _editing = new();
+    private HashSet<Guid> _saving = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadProjectsAsync();
+    }
+
+    private async Task LoadProjectsAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _projects = await db.Projects
+            .Include(p => p.PhaseOutputs)
+            .Include(p => p.Items)
+            .OrderByDescending(p => p.DecomposedAt)
+            .ToListAsync();
+    }
+
+    private void ToggleExpand(Guid id)
+    {
+        if (!_expanded.Add(id))
+            _expanded.Remove(id);
+    }
+
+    private void ToggleEdit(DecomposePhaseOutput phase)
+    {
+        if (_editing.ContainsKey(phase.Id))
+            _editing.Remove(phase.Id);
+        else
+            _editing[phase.Id] = phase.Content;
+    }
+
+    private async Task SavePhaseOutputAsync(DecomposedProject project, DecomposePhaseOutput phase)
+    {
+        if (!_editing.TryGetValue(phase.Id, out string? newContent)) return;
+        _saving.Add(phase.Id);
+
+        try
+        {
+            // Write to disk if the output path exists
+            if (!string.IsNullOrWhiteSpace(project.OutputPath) && Directory.Exists(project.OutputPath))
+            {
+                string filePath = Path.Combine(project.OutputPath, phase.Filename);
+                await File.WriteAllTextAsync(filePath, newContent);
+            }
+
+            // Update DB record
+            await using (var db = await DbFactory.CreateDbContextAsync())
+            {
+                var dbPhase = await db.PhaseOutputs.FindAsync(phase.Id);
+                if (dbPhase is not null)
+                {
+                    dbPhase.Content = newContent;
+                    await db.SaveChangesAsync();
+                }
+            }
+
+            // Update in-memory so the view reflects the change immediately
+            phase.Content = newContent;
+            _editing.Remove(phase.Id);
+
+            // Re-import inventory if this is the Phase 6 file
+            if (phase.Filename.StartsWith("06-", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(project.OutputPath))
+            {
+                string phase6Path = Path.Combine(project.OutputPath, phase.Filename);
+                if (File.Exists(phase6Path))
+                    await InventoryParser.ParseAndImportAsync(phase6Path, project.Name, project.Source, CancellationToken.None);
+            }
+        }
+        finally
+        {
+            _saving.Remove(phase.Id);
+        }
+    }
+
+    private async Task RefreshProjectFilesAsync(DecomposedProject project)
+    {
+        _refreshing.Add(project.Id);
+        StateHasChanged();
+
+        try
+        {
+            if (!Directory.Exists(project.OutputPath))
+                return;
+
+            string[] files = Directory.GetFiles(project.OutputPath, "*.md");
+
+            // Re-sync phase outputs
+            await using (var db = await DbFactory.CreateDbContextAsync())
+            {
+                db.PhaseOutputs.RemoveRange(db.PhaseOutputs.Where(o => o.ProjectId == project.Id));
+                await db.SaveChangesAsync();
+
+                foreach (string file in files.OrderBy(f => f))
+                {
+                    string filename = Path.GetFileName(file);
+                    int phaseNumber = 0;
+                    if (filename.Length >= 3 && filename[2] == '-' && int.TryParse(filename[..2], out int n))
+                        phaseNumber = n;
+
+                    string content = await File.ReadAllTextAsync(file);
+                    db.PhaseOutputs.Add(new DecomposePhaseOutput
+                    {
+                        Id          = Guid.NewGuid(),
+                        ProjectId   = project.Id,
+                        PhaseNumber = phaseNumber,
+                        Filename    = filename,
+                        Content     = content,
+                        CreatedAt   = DateTime.UtcNow
+                    });
+                }
+                await db.SaveChangesAsync();
+            }
+
+            // Re-import inventory if Phase 6 exists
+            string? phase6File = files.FirstOrDefault(f =>
+                Path.GetFileName(f).StartsWith("06-", StringComparison.OrdinalIgnoreCase));
+            if (phase6File is not null)
+                await InventoryParser.ParseAndImportAsync(phase6File, project.Name, project.Source, CancellationToken.None);
+
+            await LoadProjectsAsync();
+        }
+        finally
+        {
+            _refreshing.Remove(project.Id);
+            StateHasChanged();
+        }
+    }
+}

@@ -1,0 +1,192 @@
+@page "/inventory"
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<OpenTransmute.Data.AppDbContext> DbFactory
+@inject ISnackbar Snackbar
+@namespace OpenTransmute.Components.Pages
+
+<PageTitle>Inventory — OpenTransmute</PageTitle>
+
+<MudText Typo="Typo.h5" GutterBottom="true">Composition Inventory</MudText>
+<MudText Typo="Typo.body2" Class="mb-4">
+    Browse algorithms, patterns, and abstractions extracted across all decomposed projects.
+    Add items to your basket, then head to <MudLink Href="/compose">Compose</MudLink> to build new systems from them.
+</MudText>
+
+<MudGrid Spacing="3">
+    <!-- Filters -->
+    <MudItem xs="12" sm="3">
+        <MudPaper Elevation="1" Class="pa-3">
+            <MudText Typo="Typo.subtitle2" GutterBottom="true">Filter by Category</MudText>
+            @foreach (var cat in Enum.GetValues<InventoryCategory>())
+            {
+                <MudCheckBox @bind-Value="_categoryFilter[cat]" Label="@cat.ToString()" Dense="true"
+                             Color="Color.Primary" />
+            }
+            <MudDivider Class="my-3" />
+            <MudText Typo="Typo.subtitle2" GutterBottom="true">Filter by Project</MudText>
+            @foreach (var proj in _projects)
+            {
+                <MudCheckBox @bind-Value="_projectFilter[proj.Id]" Label="@proj.Name" Dense="true"
+                             Color="Color.Secondary" />
+            }
+        </MudPaper>
+    </MudItem>
+
+    <!-- Results -->
+    <MudItem xs="12" sm="9">
+        <MudTextField @bind-Value="_searchText" Placeholder="Search name or summary…"
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                      Class="mb-3" Immediate="true" />
+
+        <MudDataGrid @ref="_grid" T="OpenTransmute.Models.InventoryItem" Items="@FilteredItems"
+                     Dense="true" Hover="true" Striped="true" SortMode="SortMode.Single"
+                     RowClick="@OnRowClick">
+            <Columns>
+                <HierarchyColumn T="OpenTransmute.Models.InventoryItem" />
+                <PropertyColumn Property="i => i.Name" Title="Name" />
+                <TemplateColumn Title="Category" SortBy="@(i => i.Category.ToString())">
+                    <CellTemplate>
+                        <MudChip T="string" Size="Size.Small" Color="@CategoryColor(context.Item.Category)">
+                            @context.Item.Category
+                        </MudChip>
+                    </CellTemplate>
+                </TemplateColumn>
+                <PropertyColumn Property="i => i.Project.Name" Title="Project" />
+                <PropertyColumn Property="i => i.Summary" Title="Summary" />
+                <TemplateColumn Title="Security" SortBy="@(i => i.SecurityScore)">
+                    <CellTemplate>
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudIcon Icon="@Icons.Material.Filled.Shield" Size="Size.Small"
+                                     Style="@($"color:{SecurityColor(context.Item.SecurityScore)}")" />
+                            <MudText Typo="Typo.body2" Style="@($"color:{SecurityColor(context.Item.SecurityScore)}")">
+                                @SecurityLabel(context.Item.SecurityScore)
+                            </MudText>
+                        </MudStack>
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="">
+                    <CellTemplate>
+                        <MudIconButton Icon="@Icons.Material.Filled.AddShoppingCart"
+                                       Size="Size.Small" Color="Color.Primary"
+                                       OnClick="() => AddToBasket(context.Item)" />
+                    </CellTemplate>
+                </TemplateColumn>
+            </Columns>
+            <ChildRowContent>
+                @{ var item = context.Item; }
+                <MudPaper Elevation="2" Class="pa-4 mx-4 my-2" Style="border-radius:6px">
+                    <!-- Header -->
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3" Spacing="2">
+                        <MudText Typo="Typo.h6">@item.Name</MudText>
+                        <MudChip T="string" Size="Size.Small" Color="@CategoryColor(item.Category)">@item.Category</MudChip>
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudIcon Icon="@Icons.Material.Filled.Shield"
+                                     Style="@($"color:{SecurityColor(item.SecurityScore)}")" />
+                            <MudText Typo="Typo.body2"
+                                     Style="@($"color:{SecurityColor(item.SecurityScore)};font-weight:600")">
+                                @SecurityLabel(item.SecurityScore)
+                            </MudText>
+                        </MudStack>
+                        <MudSpacer />
+                        <MudButton StartIcon="@Icons.Material.Filled.AddShoppingCart"
+                                   Color="Color.Primary" Variant="Variant.Outlined" Size="Size.Small"
+                                   OnClick="() => AddToBasket(item)">
+                            Add to Basket
+                        </MudButton>
+                    </MudStack>
+
+                    <!-- Raw markdown -->
+                    <div class="mb-3"><MudMarkdown Value="@item.RawMarkdown" /></div>
+
+                    <!-- Security notes -->
+                    @if (!string.IsNullOrWhiteSpace(item.SecurityNotes))
+                    {
+                        <MudDivider Class="mb-2" Style="@($"border-color:{SecurityColor(item.SecurityScore)}")" />
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-1">
+                            <MudIcon Icon="@Icons.Material.Filled.Shield" Size="Size.Small"
+                                     Style="@($"color:{SecurityColor(item.SecurityScore)}")" />
+                            <MudText Typo="Typo.subtitle2" Style="@($"color:{SecurityColor(item.SecurityScore)}")">
+                                Security notes — @SecurityLabel(item.SecurityScore)
+                            </MudText>
+                        </MudStack>
+                        <MudMarkdown Value="@item.SecurityNotes" />
+                    }
+                </MudPaper>
+            </ChildRowContent>
+        </MudDataGrid>
+    </MudItem>
+</MudGrid>
+
+@code {
+    private MudDataGrid<OpenTransmute.Models.InventoryItem> _grid = null!;
+    private List<OpenTransmute.Models.InventoryItem> _items = new();
+    private List<OpenTransmute.Models.DecomposedProject> _projects = new();
+    private string _searchText = string.Empty;
+
+    public static List<OpenTransmute.Models.InventoryItem> Basket { get; } = new();
+
+    private Dictionary<InventoryCategory, bool> _categoryFilter =
+        Enum.GetValues<InventoryCategory>().ToDictionary(c => c, _ => true);
+    private Dictionary<Guid, bool> _projectFilter = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _items = await db.InventoryItems.Include(i => i.Project).ToListAsync();
+        _projects = await db.Projects.ToListAsync();
+        _projectFilter = _projects.ToDictionary(p => p.Id, _ => true);
+    }
+
+    private IEnumerable<OpenTransmute.Models.InventoryItem> FilteredItems =>
+        _items.Where(i =>
+            _categoryFilter.GetValueOrDefault(i.Category, true) &&
+            _projectFilter.GetValueOrDefault(i.ProjectId, true) &&
+            (string.IsNullOrWhiteSpace(_searchText) ||
+             i.Name.Contains(_searchText, StringComparison.OrdinalIgnoreCase) ||
+             i.Summary.Contains(_searchText, StringComparison.OrdinalIgnoreCase)));
+
+    private Task OnRowClick(DataGridRowClickEventArgs<OpenTransmute.Models.InventoryItem> args)
+        => _grid.ToggleHierarchyVisibilityAsync(args.Item);
+
+    private void AddToBasket(OpenTransmute.Models.InventoryItem item)
+    {
+        if (!Basket.Any(b => b.Id == item.Id))
+        {
+            Basket.Add(item);
+            Snackbar.Add($"Added \"{item.Name}\" to basket", Severity.Success);
+        }
+        else
+        {
+            Snackbar.Add($"\"{item.Name}\" is already in the basket", Severity.Info);
+        }
+    }
+
+    private static string SecurityColor(int score) => score switch
+    {
+        0    => "#9e9e9e",
+        <= 3 => "#4caf50",
+        <= 6 => "#ff9800",
+        _    => "#f44336"
+    };
+
+    private static string SecurityLabel(int score) => score switch
+    {
+        0    => "Unscored",
+        <= 3 => $"{score}/10 Low",
+        <= 6 => $"{score}/10 Medium",
+        <= 8 => $"{score}/10 High",
+        _    => $"{score}/10 Critical"
+    };
+
+    private static Color CategoryColor(InventoryCategory c) => c switch
+    {
+        InventoryCategory.Algorithm              => Color.Primary,
+        InventoryCategory.DesignPattern          => Color.Secondary,
+        InventoryCategory.Invariant              => Color.Warning,
+        InventoryCategory.DataTransformation     => Color.Info,
+        InventoryCategory.DomainVocabulary       => Color.Dark,
+        InventoryCategory.ArchitecturalPrimitive => Color.Tertiary,
+        InventoryCategory.KeyAbstraction         => Color.Error,
+        _                                        => Color.Default
+    };
+}

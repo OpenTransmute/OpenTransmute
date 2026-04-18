@@ -1,0 +1,238 @@
+@page "/compose"
+@inject JobQueue JobQueue
+@inject JobStore JobStore
+@inject LlmSettingsService LlmSettings
+@inject NavigationManager Nav
+@inject ISnackbar Snackbar
+@inject OpenTransmute.Orchestrator.Parsing.PromptTemplates PromptTemplates
+@inject OpenTransmute.Orchestrator.Parsing.PromptBuilder PromptBuilder
+@namespace OpenTransmute.Components.Pages
+
+<PageTitle>Compose — OpenTransmute</PageTitle>
+
+<MudStack Row="false" Spacing="1" Class="mb-6">
+    <MudText Typo="Typo.h5">Compose</MudText>
+    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+        Select items from the <MudLink Href="/inventory">Inventory</MudLink>, review the assembled prompt,
+        then run the compose AI to synthesise new architectural designs.
+    </MudText>
+</MudStack>
+
+<MudGrid Spacing="3">
+
+    <!-- Left: Basket -->
+    <MudItem xs="12" md="4">
+        <MudCard Elevation="2" Style="height:100%">
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <MudText Typo="Typo.subtitle1" Style="font-weight:600">Basket</MudText>
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">@Basket.Count item(s)</MudText>
+                </CardHeaderContent>
+                <CardHeaderActions>
+                    <MudIconButton Icon="@Icons.Material.Filled.DeleteSweep" Size="Size.Small"
+                                   Color="Color.Error" OnClick="ClearBasket"
+                                   Disabled="@(!Basket.Any())" />
+                </CardHeaderActions>
+            </MudCardHeader>
+            <MudCardContent>
+                @if (!Basket.Any())
+                {
+                    <MudStack AlignItems="AlignItems.Center" Justify="Justify.Center" Class="py-8">
+                        <MudIcon Icon="@Icons.Material.Filled.ShoppingCartCheckout"
+                                 Size="Size.Large" Color="Color.Default" Style="opacity:0.3" />
+                        <MudText Typo="Typo.body2" Class="mud-text-secondary mt-2">
+                            No items yet. Go to <MudLink Href="/inventory">Inventory</MudLink> to add some.
+                        </MudText>
+                    </MudStack>
+                }
+                else
+                {
+                    <MudChipSet T="OpenTransmute.Models.InventoryItem" AllClosable="true"
+                                OnClose="@((MudChip<OpenTransmute.Models.InventoryItem> chip) => Basket.Remove(chip.Value!))">
+                        @foreach (var item in Basket)
+                        {
+                            <MudChip T="OpenTransmute.Models.InventoryItem" Value="@item"
+                                     Color="@CategoryColor(item.Category)" Size="Size.Small">
+                                @item.Name
+                            </MudChip>
+                        }
+                    </MudChipSet>
+                }
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
+
+    <!-- Right: Config + Run -->
+    <MudItem xs="12" md="8">
+        <MudStack Spacing="3">
+
+            <!-- Prompt Preview -->
+            <MudExpansionPanels Elevation="1">
+                <MudExpansionPanel Text="Prompt Preview">
+                    <MudPaper Elevation="0" Class="ot-code-panel">
+                        <MudMarkdown Value="@AssembledPrompt" />
+                    </MudPaper>
+                    <MudButton StartIcon="@Icons.Material.Filled.ContentCopy" Size="Size.Small"
+                               Class="mt-2" OnClick="CopyPrompt">
+                        Copy to clipboard
+                    </MudButton>
+                </MudExpansionPanel>
+            </MudExpansionPanels>
+
+            <!-- Target + Run card -->
+            <MudCard Elevation="2">
+                <MudCardHeader>
+                    <CardHeaderContent>
+                        <MudText Typo="Typo.subtitle1" Style="font-weight:600">Target Specification</MudText>
+                    </CardHeaderContent>
+                </MudCardHeader>
+                <MudCardContent>
+                    <MudGrid Spacing="3">
+
+                        <MudItem xs="12" sm="6">
+                            <MudTextField @bind-Value="_outputName" Label="Output Name"
+                                          Placeholder="my-composition" Required="true"
+                                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.DriveFileRenameOutline"
+                                          HelperText="Saved to Output/Composition/<name>/compose-output.md" />
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <MudTextField @bind-Value="_targetDescription" Label="What should it do?"
+                                          Placeholder="e.g. A real-time event processing pipeline that ingests sensor data and triggers alerts"
+                                          Lines="3"
+                                          HelperText="Describe the system's purpose and behaviour" />
+                        </MudItem>
+
+                        <MudItem xs="12" sm="6">
+                            <MudTextField @bind-Value="_targetEnvironment" Label="Where does it run?"
+                                          Placeholder="e.g. AWS Lambda + DynamoDB, on-prem Kubernetes"
+                                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Cloud"
+                                          HelperText="Deployment environment and infrastructure" />
+                        </MudItem>
+
+                        <MudItem xs="12" sm="6">
+                            <MudTextField @bind-Value="_targetTechnology" Label="What tech stack?"
+                                          Placeholder="e.g. Rust + Tokio, C# .NET 9, Go + gRPC"
+                                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Code"
+                                          HelperText="Language, framework, and key libraries" />
+                        </MudItem>
+
+                    </MudGrid>
+                </MudCardContent>
+                <MudCardActions Class="pa-4">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="3">
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+                                   StartIcon="@Icons.Material.Filled.AutoAwesome"
+                                   OnClick="RunCompose"
+                                   Disabled="@(!Basket.Any() || string.IsNullOrWhiteSpace(_outputName) || _running
+                                       || (LlmSettings.Orchestrator == OrchestratorType.OpenAI && string.IsNullOrWhiteSpace(LlmSettings.OpenAiApiKey)))">
+                            @(_running ? "Starting…" : "Run Compose")
+                        </MudButton>
+                        @if (LlmSettings.Orchestrator == OrchestratorType.OpenAI && string.IsNullOrWhiteSpace(LlmSettings.OpenAiApiKey))
+                        {
+                            <MudAlert Severity="Severity.Warning" Dense="true" NoIcon="false">
+                                API key required —
+                                <MudLink Href="/settings">configure in Settings</MudLink>
+                            </MudAlert>
+                        }
+                        else
+                        {
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small"
+                                         Color="@(LlmSettings.Orchestrator == OrchestratorType.ClaudeCode ? Color.Primary
+                                                 : LlmSettings.Orchestrator == OrchestratorType.Ollama ? Color.Secondary
+                                                 : Color.Tertiary)" />
+                                <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                                    @LlmSettings.Orchestrator
+                                    @if (!string.IsNullOrWhiteSpace(LlmSettings.RegularModel)
+                                         && LlmSettings.Orchestrator != OrchestratorType.ClaudeCode)
+                                    {
+                                        <span> · @LlmSettings.RegularModel</span>
+                                    }
+                                </MudText>
+                                <MudButton Variant="Variant.Text" Size="Size.Small" Href="/settings">
+                                    Change
+                                </MudButton>
+                            </MudStack>
+                        }
+                    </MudStack>
+                </MudCardActions>
+            </MudCard>
+
+        </MudStack>
+    </MudItem>
+
+</MudGrid>
+
+@code {
+    private static List<OpenTransmute.Models.InventoryItem> Basket => Inventory.Basket;
+
+    private string _outputName = string.Empty;
+    private string? _targetDescription;
+    private string? _targetEnvironment;
+    private string? _targetTechnology;
+    private bool _running;
+
+    private string AssembledPrompt
+    {
+        get
+        {
+            if (!Basket.Any()) return "(add items to the basket to see the prompt)";
+            var blocks = Basket.Select(i => $"### {i.Category}: {i.Name}\n\n{i.RawMarkdown}");
+            return PromptBuilder.BuildComposePrompt(
+                blocks,
+                _targetDescription,
+                _targetEnvironment,
+                _targetTechnology,
+                string.IsNullOrWhiteSpace(LlmSettings.UserEthos) ? null : LlmSettings.UserEthos);
+        }
+    }
+
+    private void ClearBasket() => Basket.Clear();
+
+    private async Task CopyPrompt()
+    {
+        Snackbar.Add("Prompt copied (clipboard JS interop not yet wired)", Severity.Info);
+        await Task.CompletedTask;
+    }
+
+    private async Task RunCompose()
+    {
+        if (!Basket.Any() || string.IsNullOrWhiteSpace(_outputName)) return;
+
+        _running = true;
+        var options = new ComposeOptions
+        {
+            OutputName         = _outputName,
+            SelectedItemIds    = Basket.Select(i => i.Id).ToList(),
+            TargetDescription  = string.IsNullOrWhiteSpace(_targetDescription) ? null : _targetDescription,
+            TargetEnvironment  = string.IsNullOrWhiteSpace(_targetEnvironment) ? null : _targetEnvironment,
+            TargetTechnology   = string.IsNullOrWhiteSpace(_targetTechnology)  ? null : _targetTechnology,
+            Orchestrator       = LlmSettings.Orchestrator,
+            Model              = string.IsNullOrWhiteSpace(LlmSettings.RegularModel) ? null : LlmSettings.RegularModel,
+            OpenAiApiKey       = string.IsNullOrWhiteSpace(LlmSettings.OpenAiApiKey)  ? null : LlmSettings.OpenAiApiKey,
+            OpenAiEndpoint     = string.IsNullOrWhiteSpace(LlmSettings.OpenAiEndpoint) ? null : LlmSettings.OpenAiEndpoint,
+            OutputRoot         = Directory.GetCurrentDirectory(),
+            TimeoutMinutes     = LlmSettings.TimeoutMinutes,
+            UserEthos          = string.IsNullOrWhiteSpace(LlmSettings.UserEthos) ? null : LlmSettings.UserEthos
+        };
+
+        var job = new ComposeJob { Options = options };
+        job.AssembledPrompt = AssembledPrompt;
+        JobStore.Add(job);
+        await JobQueue.EnqueueAsync(job);
+        Nav.NavigateTo($"/compose/jobs/{job.Id}");
+    }
+
+    private static Color CategoryColor(InventoryCategory c) => c switch
+    {
+        InventoryCategory.Algorithm            => Color.Primary,
+        InventoryCategory.DesignPattern        => Color.Secondary,
+        InventoryCategory.Invariant            => Color.Warning,
+        InventoryCategory.DataTransformation   => Color.Info,
+        InventoryCategory.DomainVocabulary     => Color.Dark,
+        InventoryCategory.ArchitecturalPrimitive => Color.Tertiary,
+        InventoryCategory.KeyAbstraction       => Color.Error,
+        _                                      => Color.Default
+    };
+}

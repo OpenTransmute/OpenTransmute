@@ -1,0 +1,121 @@
+@page "/implement/jobs/{JobId:guid}"
+@inject JobStore JobStore
+@implements IDisposable
+@namespace OpenTransmute.Components.Pages
+
+<PageTitle>Implement Job — OpenTransmute</PageTitle>
+
+@if (_job is null)
+{
+    <MudText>Job not found.</MudText>
+    return;
+}
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-1" Spacing="2">
+    <MudText Typo="Typo.h5">@(_job.Options.Label ?? "Implement")</MudText>
+    <MudChip T="string" Size="Size.Small" Color="@StatusColor(_job.Status)">@_job.Status</MudChip>
+    @if (_job.TotalElapsed.HasValue)
+    {
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            @_job.TotalElapsed.Value.ToString(@"hh\:mm\:ss") elapsed
+        </MudText>
+    }
+</MudStack>
+
+<MudText Typo="Typo.body2" Class="mud-text-secondary">
+    @_job.Options.Orchestrator
+    @if (_job.Options.Model is not null)
+    {
+        <span> · @_job.Options.Model</span>
+    }
+</MudText>
+<MudText Typo="Typo.body2" Class="mud-text-secondary mb-4">
+    Output: @_job.Options.OutputDirectory
+</MudText>
+
+@if (_job.Status == JobStatus.Failed && _job.ErrorMessage is not null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4">@_job.ErrorMessage</MudAlert>
+}
+
+@if (_job.Status == JobStatus.Completed)
+{
+    <MudAlert Severity="Severity.Success" Class="mb-4">
+        Implementation complete. Files written to: @_job.Options.OutputDirectory
+    </MudAlert>
+}
+
+<MudText Typo="Typo.subtitle2" Class="mb-1">Log</MudText>
+<MudPaper Elevation="1" Class="pa-3" Style="max-height:700px;overflow-y:auto;background:#1e1e1e">
+    @foreach (var line in _job.LogLines)
+    {
+        <div style="color:#d4d4d4;font-family:monospace;font-size:0.75rem;white-space:pre-wrap">@line</div>
+    }
+    <div @ref="_logBottom"></div>
+</MudPaper>
+
+@code {
+    [Parameter] public Guid JobId { get; set; }
+
+    private ImplementJob? _job;
+    private PeriodicTimer? _ticker;
+    private ElementReference _logBottom;
+
+    [Inject] private IJSRuntime JS { get; set; } = null!;
+
+    protected override void OnInitialized()
+    {
+        _job = JobStore.GetImplement(JobId);
+        if (_job is not null)
+            _job.OnChanged += OnJobChanged;
+
+        if (_job?.Status == JobStatus.Running)
+            _ = TickAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_job?.Status == JobStatus.Running)
+            await JS.InvokeVoidAsync("scrollLogToBottom", _logBottom);
+    }
+
+    private void OnJobChanged()
+    {
+        if (_job?.Status == JobStatus.Running && _ticker is null)
+            _ = TickAsync();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async Task TickAsync()
+    {
+        _ticker = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        try
+        {
+            while (await _ticker.WaitForNextTickAsync())
+            {
+                if (_job?.Status is not JobStatus.Running) break;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        finally
+        {
+            _ticker.Dispose();
+            _ticker = null;
+        }
+    }
+
+    private static Color StatusColor(JobStatus s) => s switch
+    {
+        JobStatus.Completed => Color.Success,
+        JobStatus.Failed    => Color.Error,
+        JobStatus.Running   => Color.Info,
+        _                   => Color.Default
+    };
+
+    public void Dispose()
+    {
+        if (_job is not null)
+            _job.OnChanged -= OnJobChanged;
+        _ticker?.Dispose();
+    }
+}
