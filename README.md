@@ -2,6 +2,8 @@
 
 > **Decompose any codebase. Accumulate its ideas. Compose new systems from them.**
 
+**[Documentation](https://opentransmute.github.io/OpenTransmute/)**
+
 OpenTransmute is a self-hosted tool that automates the process of turning an existing codebase into a language-agnostic specification, building a growing library of reusable algorithms, patterns, and abstractions, and then composing new system designs from that library. It ships as both a **local web app** and a **CLI** (`otx`).
 
 ---
