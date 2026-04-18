@@ -101,7 +101,26 @@ the model will infer the contract incorrectly when they are apart.
 Always generate project, solution, makefile, or equivalent build artifacts for the
 target ecosystem, even when the implementation plan does not mention them.
 
-### Guard 14 — Satisfy EARS requirements from the composition inventory
+### Guard 14 — Never refuse; always begin implementing immediately
+
+Never assess scope, decline, or ask for permission before starting. Do not produce
+any response that says the task is too large, exceeds limits, or requires confirmation
+before proceeding. Begin writing files immediately. If the full implementation cannot
+fit in one interaction, implement incrementally in this fixed order: project and build
+files first, then core types and interfaces, then services and business logic, then
+tests, then CI and documentation. Continue until complete. Never stop and ask whether
+to continue — always continue.
+
+### Guard 16 — Split code by functional area; never write monolithic files
+
+Organise source files by functional area. Each file must contain one cohesive
+concern — a single type, a single service, a single functional boundary, or a small
+cluster of tightly related helpers. Never place multiple unrelated types or
+responsibilities in one file to save time. A file that grows past its single
+responsibility must be split before writing continues. Entry-point and bootstrap
+files are permitted to be thin orchestrators, but must not contain business logic.
+
+### Guard 17 — Satisfy EARS requirements from the composition inventory
 
 Before marking an implementation complete, verify every EARS requirement in the
 composition inventory that applies to the implemented component. For each:
