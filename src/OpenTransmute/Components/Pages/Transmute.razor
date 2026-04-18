@@ -1,0 +1,220 @@
+@page "/transmute"
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<OpenTransmute.Data.AppDbContext> DbFactory
+@inject JobQueue JobQueue
+@inject JobStore JobStore
+@inject LlmSettingsService LlmSettings
+@inject NavigationManager Nav
+@inject ISnackbar Snackbar
+@namespace OpenTransmute.Components.Pages
+
+<PageTitle>Transmute — OpenTransmute</PageTitle>
+
+<MudStack Row="false" Spacing="1" Class="mb-6">
+    <MudText Typo="Typo.h5">Transmute</MudText>
+    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+        Pick a decomposed project and describe how to re-implement it.
+        The selected LLM will produce a detailed implementation design (compose output).
+        From there you can click <strong>Implement</strong> to have the thick model write the actual code.
+    </MudText>
+</MudStack>
+
+<MudCard Elevation="2" Style="max-width:860px">
+    <MudCardContent>
+        <MudGrid Spacing="3">
+
+            <MudItem xs="12" sm="6">
+                <MudSelect T="string" @bind-Value="_projectName" Label="Decomposed Project" Required="true"
+                           Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.AccountTree"
+                           HelperText="The project whose spec you want to re-implement">
+                    @foreach (var p in _projects)
+                    {
+                        <MudSelectItem Value="@p.Name">
+                            @p.Name
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary ml-2">
+                                (@p.PhaseOutputCount spec file(s))
+                            </MudText>
+                        </MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_outputName" Label="Output Name" Required="true"
+                              Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.DriveFileRenameOutline"
+                              Placeholder="my-rust-port"
+                              HelperText="Saved to Output/Composition/<name>/compose-output.md" />
+            </MudItem>
+
+            <MudItem xs="12">
+                <MudTextField @bind-Value="_targetDescription" Label="How to re-implement it" Required="true"
+                              Lines="4"
+                              Placeholder="e.g. Re-implement this project in Rust using Axum for HTTP, Tokio for async, and SQLite via rusqlite. Follow idiomatic Rust patterns throughout."
+                              HelperText="Describe the target language, framework, and any specific implementation requirements. The LLM will produce a detailed design document as output." />
+            </MudItem>
+
+            <MudItem xs="12" sm="4">
+                <MudNumericField @bind-Value="_maxTokens" Label="Max Output Tokens" Min="1024" Max="1000000" Step="4096"
+                                 Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.DataObject"
+                                 HelperText="Keep high — the full spec design needs space (default 64k)" />
+            </MudItem>
+
+        </MudGrid>
+    </MudCardContent>
+
+    <MudCardActions Class="pa-4">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="3">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+                       StartIcon="@Icons.Material.Filled.AutoFixHigh"
+                       OnClick="RunTransmute"
+                       Disabled="@(!CanRun)">
+                @(_running ? "Starting…" : "Design Re-implementation")
+            </MudButton>
+
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small"
+                         Color="@(LlmSettings.Orchestrator == OrchestratorType.ClaudeCode ? Color.Primary
+                                 : LlmSettings.Orchestrator == OrchestratorType.Ollama ? Color.Secondary
+                                 : Color.Tertiary)" />
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                    @LlmSettings.Orchestrator
+                </MudText>
+                <MudButton Variant="Variant.Text" Size="Size.Small" Href="/settings">Change</MudButton>
+            </MudStack>
+        </MudStack>
+    </MudCardActions>
+</MudCard>
+
+@code {
+    [SupplyParameterFromQuery(Name = "project")]
+    public string? ProjectParam { get; set; }
+
+    private record ProjectSummary(string Name, string Source, int PhaseOutputCount, int ItemCount);
+
+    private List<ProjectSummary> _projects = new();
+    private string _projectName = string.Empty;
+    private string _outputName = string.Empty;
+    private string _targetDescription = string.Empty;
+    private int _maxTokens = 65536;
+    private bool _running;
+
+    private bool CanRun =>
+        !_running &&
+        !string.IsNullOrWhiteSpace(_projectName) &&
+        !string.IsNullOrWhiteSpace(_outputName) &&
+        !string.IsNullOrWhiteSpace(_targetDescription);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var raw = await db.Projects
+            .Select(p => new
+            {
+                p.Name,
+                p.Source,
+                PhaseOutputCount = p.PhaseOutputs.Count(),
+                ItemCount = p.Items.Count()
+            })
+            .OrderBy(p => p.Name)
+            .ToListAsync();
+        _projects = raw.Select(p => new ProjectSummary(p.Name, p.Source, p.PhaseOutputCount, p.ItemCount)).ToList();
+
+        if (!string.IsNullOrWhiteSpace(ProjectParam))
+        {
+            _projectName = ProjectParam;
+            _outputName  = ProjectParam.ToLowerInvariant().Replace(" ", "-") + "-reimplement";
+        }
+        else if (_projects.Count == 1)
+        {
+            _projectName = _projects[0].Name;
+        }
+    }
+
+    private async Task RunTransmute()
+    {
+        if (!CanRun) return;
+        _running = true;
+
+        // Load all phase outputs for this project from the DB
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var project = await db.Projects
+            .Include(p => p.PhaseOutputs)
+            .FirstOrDefaultAsync(p => p.Name == _projectName);
+
+        if (project is null)
+        {
+            Snackbar.Add($"Project '{_projectName}' not found in database.", Severity.Error);
+            _running = false;
+            return;
+        }
+
+        // Build prebuilt prompt from all phase file content
+        string prebuiltPrompt = BuildTransmutePrompt(project, _outputName, _targetDescription);
+
+        var options = new ComposeOptions
+        {
+            OutputName        = _outputName,
+            PrebuiltPrompt    = prebuiltPrompt,
+            SourceLabel       = $"Transmute: {project.Name}",
+            Orchestrator      = LlmSettings.Orchestrator,
+            Model             = string.IsNullOrWhiteSpace(LlmSettings.RegularModel) ? null : LlmSettings.RegularModel,
+            OpenAiApiKey      = string.IsNullOrWhiteSpace(LlmSettings.OpenAiApiKey)  ? null : LlmSettings.OpenAiApiKey,
+            OpenAiEndpoint    = string.IsNullOrWhiteSpace(LlmSettings.OpenAiEndpoint) ? null : LlmSettings.OpenAiEndpoint,
+            OutputRoot        = Directory.GetCurrentDirectory(),
+            TimeoutMinutes    = LlmSettings.TimeoutMinutes,
+            MaxOutputTokens   = _maxTokens
+        };
+
+        var job = new ComposeJob { Options = options };
+        job.AssembledPrompt = prebuiltPrompt;
+        JobStore.Add(job);
+        await JobQueue.EnqueueAsync(job);
+        Nav.NavigateTo($"/compose/jobs/{job.Id}");
+    }
+
+    private static string BuildTransmutePrompt(
+        OpenTransmute.Models.DecomposedProject project, string newProjectName, string targetDescription)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"# Re-implementation Design: {newProjectName}");
+        sb.AppendLine();
+        sb.AppendLine($"You are producing an implementation design for a new project named \"{newProjectName}\".");
+        sb.AppendLine($"The new project is a re-implementation of the source project \"{project.Name}\".");
+        sb.AppendLine($"Use \"{newProjectName}\" as the project name, root namespace, package name, module name,");
+        sb.AppendLine($"solution name, or equivalent top-level identifier throughout this design — not \"{project.Name}\".");
+        sb.AppendLine();
+        sb.AppendLine("The following is the complete decomposition specification for the source project.");
+        sb.AppendLine("Read it thoroughly, then produce a detailed implementation design document for the target described below.");
+        sb.AppendLine();
+        sb.AppendLine("## Target Re-implementation");
+        sb.AppendLine(targetDescription);
+        sb.AppendLine();
+        sb.AppendLine("## Source Specification");
+        sb.AppendLine();
+
+        foreach (var phase in project.PhaseOutputs.OrderBy(p => p.PhaseNumber).ThenBy(p => p.Filename))
+        {
+            sb.AppendLine($"### {phase.Filename}");
+            sb.AppendLine();
+            sb.AppendLine(phase.Content);
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("---");
+        sb.AppendLine();
+        sb.AppendLine("## Your Task");
+        sb.AppendLine();
+        sb.AppendLine($"Produce a comprehensive implementation design document for the new project \"{newProjectName}\". Include:");
+        sb.AppendLine("- Project structure and file layout for the target tech stack");
+        sb.AppendLine("- Core modules/components and their responsibilities");
+        sb.AppendLine("- Data models and schemas");
+        sb.AppendLine("- Key APIs and interfaces");
+        sb.AppendLine("- Implementation approach for each major algorithm and design pattern from the spec");
+        sb.AppendLine("- Configuration, build, and deployment steps");
+        sb.AppendLine();
+        sb.AppendLine($"Name everything \"{newProjectName}\" — not \"{project.Name}\".");
+        sb.AppendLine("The output should be detailed enough for an engineer (or AI) to implement the full system from this document alone.");
+
+        return sb.ToString();
+    }
+}

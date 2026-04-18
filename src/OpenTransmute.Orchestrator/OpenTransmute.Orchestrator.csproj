@@ -1,0 +1,31 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Prompts are embedded here and exposed to both orchestrators via typeof(PromptTemplates).Assembly -->
+    <EmbeddedResource Include="Prompts\decompose.md" Link="Prompts\decompose.md">
+      <LogicalName>decompose.md</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Prompts\compose.md" Link="Prompts\compose.md">
+      <LogicalName>compose.md</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Prompts\transmute.md" Link="Prompts\transmute.md">
+      <LogicalName>transmute.md</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Prompts\.transmuteignore" Link="Prompts\.transmuteignore">
+      <LogicalName>.transmuteignore</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.3.0" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.3.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.5" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,54 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.4.11626.88
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenTransmute", "src\OpenTransmute\OpenTransmute.csproj", "{9E1CC9F5-644B-430D-07A7-2517533E506F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestRig", "src\TestRig\TestRig.csproj", "{F4DDF93E-6AEC-4541-9F04-67CE00714601}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenTransmute.Orchestrator", "src\OpenTransmute.Orchestrator\OpenTransmute.Orchestrator.csproj", "{0E282D78-9267-4AC8-9247-B9B7DD22A1E9}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenTransmute.Core", "src\OpenTransmute.Core\OpenTransmute.Core.csproj", "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenTransmute.Cli", "src\OpenTransmute.Cli\OpenTransmute.Cli.csproj", "{C7D6E5F4-A3B2-1098-7654-32FEDCBA9876}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{3CAEC7FF-1AA7-49FF-9839-6205BB456A12}"
+	ProjectSection(SolutionItems) = preProject
+		.transmuteignore = .transmuteignore
+		README.md = README.md
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{9E1CC9F5-644B-430D-07A7-2517533E506F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9E1CC9F5-644B-430D-07A7-2517533E506F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9E1CC9F5-644B-430D-07A7-2517533E506F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9E1CC9F5-644B-430D-07A7-2517533E506F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F4DDF93E-6AEC-4541-9F04-67CE00714601}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F4DDF93E-6AEC-4541-9F04-67CE00714601}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F4DDF93E-6AEC-4541-9F04-67CE00714601}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F4DDF93E-6AEC-4541-9F04-67CE00714601}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0E282D78-9267-4AC8-9247-B9B7DD22A1E9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0E282D78-9267-4AC8-9247-B9B7DD22A1E9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0E282D78-9267-4AC8-9247-B9B7DD22A1E9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0E282D78-9267-4AC8-9247-B9B7DD22A1E9}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C7D6E5F4-A3B2-1098-7654-32FEDCBA9876}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C7D6E5F4-A3B2-1098-7654-32FEDCBA9876}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C7D6E5F4-A3B2-1098-7654-32FEDCBA9876}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C7D6E5F4-A3B2-1098-7654-32FEDCBA9876}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {B3771F76-5370-42BF-AAB3-11500130274A}
+	EndGlobalSection
+EndGlobal

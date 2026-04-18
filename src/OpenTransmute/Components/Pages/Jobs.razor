@@ -1,0 +1,150 @@
+@page "/jobs"
+@inject JobStore JobStore
+@inject NavigationManager Nav
+@namespace OpenTransmute.Components.Pages
+
+<PageTitle>Jobs — OpenTransmute</PageTitle>
+
+<MudStack Row="false" Spacing="1" Class="mb-6">
+    <MudText Typo="Typo.h5">Job Monitor</MudText>
+    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+        All decompose and compose runs — click a row to view details.
+    </MudText>
+</MudStack>
+
+<MudTabs Elevation="0" Rounded="false" ApplyEffectsToContainer="true">
+
+    <!-- Decompose tab -->
+    <MudTabPanel Text="Decompose"
+                 Icon="@Icons.Material.Filled.RocketLaunch"
+                 BadgeData="@(JobStore.AllDecomposeJobs.Count() is int dc and > 0 ? dc : null)"
+                 BadgeColor="Color.Primary">
+        @if (!JobStore.AllDecomposeJobs.Any())
+        {
+            <MudStack AlignItems="AlignItems.Center" Class="py-12">
+                <MudIcon Icon="@Icons.Material.Filled.RocketLaunch" Size="Size.Large" Style="opacity:0.25" />
+                <MudText Typo="Typo.body2" Class="mud-text-secondary mt-2">
+                    No decompose jobs yet.
+                    <MudLink Href="/">Start one</MudLink>
+                </MudText>
+            </MudStack>
+        }
+        else
+        {
+            <MudDataGrid T="DecomposeJob" Items="JobStore.AllDecomposeJobs" Dense="true" Hover="true"
+                         RowClick="@(args => Nav.NavigateTo($"/jobs/{args.Item.Id}"))"
+                         SortMode="SortMode.Single">
+                <Columns>
+                    <PropertyColumn Property="j => j.Options.ProjectName" Title="Project" />
+                    <PropertyColumn Property="j => j.Options.Source" Title="Source" />
+                    <TemplateColumn Title="Engine">
+                        <CellTemplate>
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small"
+                                         Color="@OrchestratorColor(context.Item.Options.Orchestrator)" />
+                                <MudText Typo="Typo.body2">@context.Item.Options.Orchestrator</MudText>
+                            </MudStack>
+                        </CellTemplate>
+                    </TemplateColumn>
+                    <PropertyColumn Property="j => j.CreatedAt" Title="Started" Format="yyyy-MM-dd HH:mm" />
+                    <TemplateColumn Title="Duration" Sortable="false">
+                        <CellTemplate>
+                            @(context.Item.TotalElapsed?.ToString(@"mm\:ss") ?? "—")
+                        </CellTemplate>
+                    </TemplateColumn>
+                    <TemplateColumn Title="Status" Sortable="false">
+                        <CellTemplate>
+                            <MudChip T="string" Size="Size.Small" Color="@StatusColor(context.Item.Status)"
+                                     Icon="@StatusIcon(context.Item.Status)">
+                                @context.Item.Status
+                            </MudChip>
+                        </CellTemplate>
+                    </TemplateColumn>
+                </Columns>
+            </MudDataGrid>
+        }
+    </MudTabPanel>
+
+    <!-- Compose tab -->
+    <MudTabPanel Text="Compose"
+                 Icon="@Icons.Material.Filled.AutoAwesome"
+                 BadgeData="@(JobStore.AllComposeJobs.Count() is int cc and > 0 ? cc : null)"
+                 BadgeColor="Color.Secondary">
+        @if (!JobStore.AllComposeJobs.Any())
+        {
+            <MudStack AlignItems="AlignItems.Center" Class="py-12">
+                <MudIcon Icon="@Icons.Material.Filled.AutoAwesome" Size="Size.Large" Style="opacity:0.25" />
+                <MudText Typo="Typo.body2" Class="mud-text-secondary mt-2">
+                    No compose jobs yet.
+                    <MudLink Href="/compose">Start one</MudLink>
+                </MudText>
+            </MudStack>
+        }
+        else
+        {
+            <MudDataGrid T="ComposeJob" Items="JobStore.AllComposeJobs" Dense="true" Hover="true"
+                         RowClick="@(args => Nav.NavigateTo($"/compose/jobs/{args.Item.Id}"))"
+                         SortMode="SortMode.Single">
+                <Columns>
+                    <PropertyColumn Property="j => j.Options.OutputName" Title="Output" />
+                    <TemplateColumn Title="Engine" Sortable="false">
+                        <CellTemplate>
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small"
+                                         Color="@OrchestratorColor(context.Item.Options.Orchestrator)" />
+                                <MudText Typo="Typo.body2">
+                                    @context.Item.Options.Orchestrator
+                                    @if (context.Item.Options.Model is not null)
+                                    {
+                                        <span class="mud-text-secondary"> · @context.Item.Options.Model</span>
+                                    }
+                                </MudText>
+                            </MudStack>
+                        </CellTemplate>
+                    </TemplateColumn>
+                    <PropertyColumn Property="j => j.CreatedAt" Title="Started" Format="yyyy-MM-dd HH:mm" />
+                    <TemplateColumn Title="Duration" Sortable="false">
+                        <CellTemplate>
+                            @(context.Item.TotalElapsed?.ToString(@"mm\:ss") ?? "—")
+                        </CellTemplate>
+                    </TemplateColumn>
+                    <TemplateColumn Title="Status" Sortable="false">
+                        <CellTemplate>
+                            <MudChip T="string" Size="Size.Small" Color="@StatusColor(context.Item.Status)"
+                                     Icon="@StatusIcon(context.Item.Status)">
+                                @context.Item.Status
+                            </MudChip>
+                        </CellTemplate>
+                    </TemplateColumn>
+                </Columns>
+            </MudDataGrid>
+        }
+    </MudTabPanel>
+
+</MudTabs>
+
+@code {
+    private static Color StatusColor(JobStatus s) => s switch
+    {
+        JobStatus.Completed => Color.Success,
+        JobStatus.Failed    => Color.Error,
+        JobStatus.Running   => Color.Info,
+        _                   => Color.Default
+    };
+
+    private static string StatusIcon(JobStatus s) => s switch
+    {
+        JobStatus.Completed => Icons.Material.Filled.CheckCircle,
+        JobStatus.Failed    => Icons.Material.Filled.Error,
+        JobStatus.Running   => Icons.Material.Filled.HourglassTop,
+        _                   => Icons.Material.Filled.RadioButtonUnchecked
+    };
+
+    private static Color OrchestratorColor(OrchestratorType o) => o switch
+    {
+        OrchestratorType.ClaudeCode => Color.Primary,
+        OrchestratorType.Ollama     => Color.Secondary,
+        OrchestratorType.OpenAI     => Color.Tertiary,
+        _                           => Color.Default
+    };
+}

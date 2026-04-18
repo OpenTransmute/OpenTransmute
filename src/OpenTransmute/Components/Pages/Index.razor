@@ -1,0 +1,159 @@
+@page "/decompose"
+@inject JobQueue JobQueue
+@inject JobStore JobStore
+@inject LlmSettingsService LlmSettings
+@inject NavigationManager Nav
+@namespace OpenTransmute.Components.Pages
+
+<PageTitle>Decompose — OpenTransmute</PageTitle>
+
+<MudStack Row="false" Spacing="1" Class="mb-6">
+    <MudText Typo="Typo.h5">Decompose a Codebase</MudText>
+    <MudText Typo="Typo.body1" Class="mud-text-secondary">
+        Point OpenTransmute at a git repository or local folder to generate a language-agnostic specification
+        and populate your composition inventory.
+    </MudText>
+</MudStack>
+
+<MudGrid Spacing="4">
+
+    <!-- Main form -->
+    <MudItem xs="12" lg="8">
+        <MudCard Elevation="2">
+            <MudCardContent>
+                <MudGrid Spacing="3">
+
+                    <MudItem xs="12">
+                        <MudTextField @bind-Value="_options.Source" Label="Source"
+                                      Placeholder="https://github.com/org/repo  or  C:\path\to\project"
+                                      HelperText="Git URL or local folder path"
+                                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.FolderOpen"
+                                      Required="true" RequiredError="Source is required" />
+                    </MudItem>
+
+                    <MudItem xs="12" sm="6">
+                        <MudTextField @bind-Value="_options.ProjectName" Label="Project Name"
+                                      Placeholder="auto-detected from source"
+                                      HelperText="Leave blank to infer from repo/folder name" />
+                    </MudItem>
+
+                    <MudItem xs="12" sm="2">
+                        <MudNumericField @bind-Value="_options.StartPhase" Label="Start Phase"
+                                         Min="0" Max="6"
+                                         HelperText="0 = fresh run" />
+                    </MudItem>
+
+                    <MudItem xs="12" sm="2">
+                        <MudNumericField @bind-Value="_options.MaxTurns" Label="Max Turns"
+                                         Min="5" Max="100"
+                                         HelperText="Rounds per phase" />
+                    </MudItem>
+
+                    <MudItem xs="12" sm="2">
+                        <MudNumericField @bind-Value="_options.MaxOutputTokens" Label="Max Tokens"
+                                         Min="0" Max="32768"
+                                         HelperText="0 = auto" />
+                    </MudItem>
+
+                    <MudItem xs="12">
+                        <MudExpansionPanels Elevation="0">
+                            <MudExpansionPanel Text="Analyst Hints (optional)"
+                                               Icon="@Icons.Material.Filled.Lightbulb">
+                                <MudTextField @bind-Value="_options.Hints"
+                                              Label="Hints"
+                                              Lines="5"
+                                              Placeholder="e.g. The auth system uses a custom JWT variant without a library. The scheduler is the performance-critical path. Ignore the legacy adapters in /src/legacy — they are not being ported."
+                                              HelperText="Domain knowledge, known quirks, or analysis focus areas. Injected into every phase prompt and treated as authoritative context." />
+                            </MudExpansionPanel>
+                        </MudExpansionPanels>
+                    </MudItem>
+
+                </MudGrid>
+            </MudCardContent>
+            <MudCardActions Class="pa-4">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+                           StartIcon="@Icons.Material.Filled.RocketLaunch"
+                           OnClick="SubmitJob" Disabled="_submitting">
+                    @(_submitting ? "Starting…" : "Run Decompose")
+                </MudButton>
+            </MudCardActions>
+        </MudCard>
+    </MudItem>
+
+    <!-- Engine summary panel -->
+    <MudItem xs="12" lg="4">
+        <MudCard Elevation="1" Class="ot-info-card">
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <MudText Typo="Typo.subtitle1" Style="font-weight:600">Engine</MudText>
+                </CardHeaderContent>
+                <CardHeaderAvatar>
+                    <MudIcon Icon="@Icons.Material.Filled.SmartToy" Color="Color.Primary" />
+                </CardHeaderAvatar>
+            </MudCardHeader>
+            <MudCardContent>
+                <MudStack Spacing="2">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                        <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small"
+                                 Color="@(LlmSettings.Orchestrator == OrchestratorType.ClaudeCode ? Color.Primary
+                                         : LlmSettings.Orchestrator == OrchestratorType.Ollama ? Color.Secondary
+                                         : Color.Tertiary)" />
+                        <MudText Typo="Typo.body1" Style="font-weight:600">@LlmSettings.Orchestrator</MudText>
+                    </MudStack>
+                    @if (LlmSettings.Orchestrator != OrchestratorType.ClaudeCode && !string.IsNullOrWhiteSpace(LlmSettings.RegularModel))
+                    {
+                        <MudText Typo="Typo.body2" Class="mud-text-secondary">@LlmSettings.RegularModel</MudText>
+                    }
+                    @if (LlmSettings.Orchestrator == OrchestratorType.OpenAI)
+                    {
+                        <MudChip T="string" Size="Size.Small"
+                                 Color="@(string.IsNullOrWhiteSpace(LlmSettings.OpenAiApiKey) ? Color.Warning : Color.Success)"
+                                 Icon="@(string.IsNullOrWhiteSpace(LlmSettings.OpenAiApiKey) ? Icons.Material.Filled.Warning : Icons.Material.Filled.Check)">
+                            @(string.IsNullOrWhiteSpace(LlmSettings.OpenAiApiKey) ? "API key not set" : "API key set")
+                        </MudChip>
+                    }
+                </MudStack>
+            </MudCardContent>
+            <MudCardActions>
+                <MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Settings"
+                           Href="/settings" Size="Size.Small">
+                    Change in Settings
+                </MudButton>
+            </MudCardActions>
+        </MudCard>
+    </MudItem>
+
+</MudGrid>
+
+@code {
+    private DecomposeOptions _options = new();
+    private bool _submitting;
+
+    protected override void OnInitialized()
+    {
+        _options.MaxTurns               = LlmSettings.MaxTurns;
+        _options.MaxOutputTokens        = LlmSettings.MaxOutputTokens;
+        _options.ThickMaxOutputTokens   = LlmSettings.ThickMaxOutputTokens;
+        _options.RegularMaxOutputTokens = LlmSettings.RegularMaxOutputTokens;
+        _options.ThinMaxOutputTokens    = LlmSettings.ThinMaxOutputTokens;
+        _options.TimeoutMinutes         = LlmSettings.TimeoutMinutes;
+    }
+
+    private async Task SubmitJob()
+    {
+        if (string.IsNullOrWhiteSpace(_options.Source)) return;
+
+        _options.Orchestrator   = LlmSettings.Orchestrator;
+        _options.ThickModel     = LlmSettings.ThickModel;
+        _options.RegularModel   = LlmSettings.RegularModel;
+        _options.ThinModel      = LlmSettings.ThinModel;
+        _options.OpenAiApiKey   = LlmSettings.OpenAiApiKey;
+        _options.OpenAiEndpoint = LlmSettings.OpenAiEndpoint;
+
+        _submitting = true;
+        var job = new DecomposeJob { Options = _options };
+        JobStore.Add(job);
+        await JobQueue.EnqueueAsync(job);
+        Nav.NavigateTo($"/jobs/{job.Id}");
+    }
+}

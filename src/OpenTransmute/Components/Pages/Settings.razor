@@ -1,0 +1,231 @@
+@page "/settings"
+@inject LlmSettingsService Llm
+@inject UserSettingsService UserSettings
+@inject ISnackbar Snackbar
+@namespace OpenTransmute.Components.Pages
+
+<PageTitle>Settings — OpenTransmute</PageTitle>
+
+<MudText Typo="Typo.h5" GutterBottom="true">Settings</MudText>
+<MudText Typo="Typo.body2" Class="mb-6">
+    Configure the default LLM engine used for Decompose and Compose runs.
+    API keys are held in memory only and are never written to disk.
+</MudText>
+
+<MudGrid Spacing="4" Justify="Justify.FlexStart">
+
+    <!-- Engine card -->
+    <MudItem xs="12" lg="8">
+        <MudCard Elevation="2">
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <MudText Typo="Typo.h6">LLM Engine</MudText>
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                        Select the AI backend and provide credentials.
+                    </MudText>
+                </CardHeaderContent>
+                <CardHeaderAvatar>
+                    <MudIcon Icon="@Icons.Material.Filled.SmartToy" Color="Color.Primary" Size="Size.Large" />
+                </CardHeaderAvatar>
+            </MudCardHeader>
+            <MudCardContent>
+                <MudGrid Spacing="3">
+
+                    <MudItem xs="12">
+                        <MudRadioGroup @bind-Value="Llm.Orchestrator" T="OrchestratorType">
+                            <MudStack Spacing="2">
+                                <MudPaper Outlined="true" Class="@($"pa-3 rounded-lg {(Llm.Orchestrator == OrchestratorType.ClaudeCode ? "ot-engine-selected" : "")}")">
+                                    <MudRadio Value="OrchestratorType.ClaudeCode" Color="Color.Primary">
+                                        <MudStack Spacing="0">
+                                            <MudText Typo="Typo.body1" Style="font-weight:600">Claude Code</MudText>
+                                            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                                Opus (thick) · Sonnet (regular) · Haiku (thin) — uses your existing CLI credentials
+                                            </MudText>
+                                        </MudStack>
+                                    </MudRadio>
+                                </MudPaper>
+
+                                <MudPaper Outlined="true" Class="@($"pa-3 rounded-lg {(Llm.Orchestrator == OrchestratorType.Ollama ? "ot-engine-selected" : "")}")">
+                                    <MudRadio Value="OrchestratorType.Ollama" Color="Color.Secondary">
+                                        <MudStack Spacing="0">
+                                            <MudText Typo="Typo.body1" Style="font-weight:600">Ollama</MudText>
+                                            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                                Local instance at http://localhost:11434 via Semantic Kernel
+                                            </MudText>
+                                        </MudStack>
+                                    </MudRadio>
+                                </MudPaper>
+
+                                <MudPaper Outlined="true" Class="@($"pa-3 rounded-lg {(Llm.Orchestrator == OrchestratorType.OpenAI ? "ot-engine-selected" : "")}")">
+                                    <MudRadio Value="OrchestratorType.OpenAI" Color="Color.Tertiary">
+                                        <MudStack Spacing="0">
+                                            <MudText Typo="Typo.body1" Style="font-weight:600">OpenAI / Azure OpenAI</MudText>
+                                            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                                Calls the OpenAI API (or a compatible endpoint) via Semantic Kernel
+                                            </MudText>
+                                        </MudStack>
+                                    </MudRadio>
+                                </MudPaper>
+                            </MudStack>
+                        </MudRadioGroup>
+                    </MudItem>
+
+                    <!-- OpenAI credentials -->
+                    @if (Llm.Orchestrator == OrchestratorType.OpenAI)
+                    {
+                        <MudItem xs="12" sm="5">
+                            <MudTextField @bind-Value="Llm.OpenAiApiKey" Label="API Key"
+                                          InputType="InputType.Password"
+                                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Key"
+                                          HelperText="sk-… — stored in memory only" />
+                        </MudItem>
+                        <MudItem xs="12" sm="7">
+                            <MudTextField @bind-Value="Llm.OpenAiEndpoint" Label="Custom Endpoint (optional)"
+                                          Placeholder="https://my-resource.openai.azure.com/openai/v1"
+                                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Link"
+                                          HelperText="Leave blank for official OpenAI. Use for Azure OpenAI or proxies." />
+                        </MudItem>
+                    }
+
+                </MudGrid>
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
+
+    <!-- Models card -->
+    <MudItem xs="12" lg="8">
+        <MudCard Elevation="2">
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <MudText Typo="Typo.h6">Model Selection</MudText>
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                        Decompose uses three tiers; leave blank to use defaults.
+                        @if (Llm.Orchestrator == OrchestratorType.ClaudeCode)
+                        {
+                            <span> (Claude Code ignores these — model is governed by the CLI.)</span>
+                        }
+                    </MudText>
+                </CardHeaderContent>
+                <CardHeaderAvatar>
+                    <MudIcon Icon="@Icons.Material.Filled.Psychology" Color="Color.Secondary" Size="Size.Large" />
+                </CardHeaderAvatar>
+            </MudCardHeader>
+            <MudCardContent>
+                <MudGrid Spacing="3">
+                    <MudItem xs="12" sm="4">
+                        <MudTextField @bind-Value="Llm.ThickModel" Label="Thick model"
+                                      Placeholder="@(Llm.Orchestrator == OrchestratorType.OpenAI ? "e.g. gpt-4.1 or o3" : "e.g. devstral")"
+                                      HelperText="Heavy phases (Phase 3 specs)"
+                                      Disabled="@(Llm.Orchestrator == OrchestratorType.ClaudeCode)" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudTextField @bind-Value="Llm.RegularModel" Label="Regular model"
+                                      Placeholder="@(Llm.Orchestrator == OrchestratorType.OpenAI ? "e.g. gpt-4.1-mini" : "e.g. devstral")"
+                                      HelperText="Most phases — also used for Compose"
+                                      Disabled="@(Llm.Orchestrator == OrchestratorType.ClaudeCode)" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudTextField @bind-Value="Llm.ThinModel" Label="Thin model"
+                                      Placeholder="same as regular"
+                                      HelperText="Light phases"
+                                      Disabled="@(Llm.Orchestrator == OrchestratorType.ClaudeCode)" />
+                    </MudItem>
+                </MudGrid>
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
+
+    <!-- Run defaults card -->
+    <MudItem xs="12" lg="8">
+        <MudCard Elevation="2">
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <MudText Typo="Typo.h6">Run Defaults</MudText>
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                        Defaults applied to each new Decompose job.
+                    </MudText>
+                </CardHeaderContent>
+                <CardHeaderAvatar>
+                    <MudIcon Icon="@Icons.Material.Filled.Tune" Color="Color.Tertiary" Size="Size.Large" />
+                </CardHeaderAvatar>
+            </MudCardHeader>
+            <MudCardContent>
+                <MudGrid Spacing="3">
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField @bind-Value="Llm.MaxTurns" Label="Max Turns"
+                                         Min="5" Max="100"
+                                         HelperText="Agent tool-use rounds per phase" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField @bind-Value="Llm.MaxOutputTokens" Label="Max Output Tokens (override)"
+                                         Min="0" Max="131072"
+                                         HelperText="0 = use per-weight defaults below. No effect for Claude Code." />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField @bind-Value="Llm.TimeoutMinutes" Label="HTTP Timeout (min)"
+                                         Min="1" Max="120"
+                                         HelperText="For OpenAI / Ollama requests"
+                                         Disabled="@(Llm.Orchestrator == OrchestratorType.ClaudeCode)" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField @bind-Value="Llm.ThickMaxOutputTokens" Label="Thick Max Tokens"
+                                         Min="1024" Max="131072"
+                                         HelperText="Heavy phases (Phase 3 specs)" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField @bind-Value="Llm.RegularMaxOutputTokens" Label="Regular Max Tokens"
+                                         Min="1024" Max="131072"
+                                         HelperText="Normal-weight phases" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField @bind-Value="Llm.ThinMaxOutputTokens" Label="Thin Max Tokens"
+                                         Min="1024" Max="131072"
+                                         HelperText="Light phases" />
+                    </MudItem>
+                </MudGrid>
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
+
+    <!-- Personal Ethos card -->
+    <MudItem xs="12" lg="8">
+        <MudCard Elevation="2">
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <MudText Typo="Typo.h6">Personal Composition Ethos</MudText>
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                        Your personal standards, injected as authoritative instructions into every Compose and Transmute prompt.
+                    </MudText>
+                </CardHeaderContent>
+                <CardHeaderAvatar>
+                    <MudIcon Icon="@Icons.Material.Filled.AutoFixHigh" Color="Color.Primary" Size="Size.Large" />
+                </CardHeaderAvatar>
+            </MudCardHeader>
+            <MudCardContent>
+                <MudTextField @bind-Value="Llm.UserEthos"
+                              Label="Your Ethos"
+                              Lines="10"
+                              Placeholder="Describe how you want composed code to look and feel. Examples:&#10;&#10;• Naming: PascalCase for types, camelCase for locals, SCREAMING_SNAKE for constants. Abbreviations forbidden.&#10;• Error handling: fail fast, no swallowed exceptions, all errors wrapped with context before propagation.&#10;• Testing: every public method must have at least one property-based test. No mocks — use real dependencies or in-memory fakes.&#10;• Code style: max 40 lines per method, prefer expression bodies, guard clauses at the top.&#10;• Logging: structured JSON logs only, DEBUG for internals, INFO for state transitions, ERROR with full stack on failures."
+                              HelperText="Plain text or markdown. Injected verbatim into the compose prompt — be specific and opinionated." />
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
+
+    <!-- Save button -->
+    <MudItem xs="12" lg="8">
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+                   StartIcon="@Icons.Material.Filled.Save"
+                   OnClick="Save">
+            Save Settings
+        </MudButton>
+    </MudItem>
+
+</MudGrid>
+
+@code {
+    private async Task Save()
+    {
+        await UserSettings.SaveAsync();
+        Snackbar.Add("Settings saved.", Severity.Success);
+    }
+}

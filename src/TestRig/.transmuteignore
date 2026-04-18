@@ -1,0 +1,49 @@
+# .transmuteignore — exclude paths from OpenTransmute source ingestion.
+# Syntax is gitignore-compatible:
+#   pattern/   → directories only
+#   /pattern   → anchored to root
+#   **         → any number of path segments
+#   *          → any characters within one segment
+#   !pattern   → un-ignore (negate a previous rule)
+
+# ── Version control ──────────────────────────────────────────────────────────
+.git/
+
+# ── .NET build artifacts ─────────────────────────────────────────────────────
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.DotSettings.user
+
+# ── NuGet ────────────────────────────────────────────────────────────────────
+packages/
+.nuget/
+*.nupkg
+
+# ── Node ─────────────────────────────────────────────────────────────────────
+node_modules/
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# ── Java / Kotlin ────────────────────────────────────────────────────────────
+target/
+.gradle/
+build/
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.idea/
+*.iml
+
+# ── Test output / coverage ───────────────────────────────────────────────────
+TestResults/
+coverage/

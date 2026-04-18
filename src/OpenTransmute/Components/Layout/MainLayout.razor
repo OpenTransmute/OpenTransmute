@@ -1,0 +1,125 @@
+@inherits LayoutComponentBase
+
+<MudThemeProvider @ref="_mudThemeProvider" Theme="_theme" @bind-IsDarkMode="_isDarkMode" />
+<MudDialogProvider />
+<MudSnackbarProvider />
+<MudPopoverProvider />
+
+<MudLayout>
+    <MudAppBar Elevation="0" Class="ot-appbar">
+        <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit"
+                       Edge="Edge.Start" OnClick="@ToggleDrawer" />
+        <img src="/images/logo-icon.png" alt=""
+             style="height:26px;width:26px;object-fit:contain;margin:0 6px 0 4px;flex-shrink:0" />
+        <MudText Typo="Typo.h6" Style="font-weight:600;letter-spacing:-0.3px">OpenTransmute</MudText>
+        <MudSpacer />
+        <MudTooltip Text="@(_isDarkMode ? "Light mode" : "Dark mode")" Placement="Placement.Bottom">
+            <MudIconButton Icon="@(_isDarkMode ? Icons.Material.Filled.LightMode : Icons.Material.Filled.DarkMode)"
+                           Color="Color.Inherit" OnClick="ToggleTheme" />
+        </MudTooltip>
+    </MudAppBar>
+
+    <MudDrawer @bind-Open="_drawerOpen" Elevation="0" Variant="DrawerVariant.Responsive" Class="ot-drawer">
+        <MudDrawerHeader Style="min-height:64px;display:flex;align-items:center;padding:0 16px">
+            <MudText Typo="Typo.caption" Style="opacity:0.5;letter-spacing:0.08em;text-transform:uppercase;font-size:0.65rem">
+                Navigation
+            </MudText>
+        </MudDrawerHeader>
+        <MudNavMenu Class="px-2">
+            <MudNavLink Href="/" Icon="@Icons.Material.Filled.Home" Match="NavLinkMatch.All">
+                Home
+            </MudNavLink>
+            <MudNavLink Href="/decompose" Icon="@Icons.Material.Filled.RocketLaunch">
+                Decompose
+            </MudNavLink>
+            <MudNavLink Href="/jobs" Icon="@Icons.Material.Filled.Monitor">
+                Jobs
+            </MudNavLink>
+            <MudNavLink Href="/projects" Icon="@Icons.Material.Filled.AccountTree">
+                Projects
+            </MudNavLink>
+            <MudNavLink Href="/inventory" Icon="@Icons.Material.Filled.LibraryBooks">
+                Inventory
+            </MudNavLink>
+            <MudNavLink Href="/compose" Icon="@Icons.Material.Filled.AutoAwesome">
+                Compose
+            </MudNavLink>
+            <MudNavLink Href="/transmute" Icon="@Icons.Material.Filled.Transform">
+                Transmute
+            </MudNavLink>
+            <MudDivider Class="my-3" />
+            <MudNavLink Href="/settings" Icon="@Icons.Material.Filled.Settings">
+                Settings
+            </MudNavLink>
+        </MudNavMenu>
+    </MudDrawer>
+
+    <MudMainContent>
+        <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pt-6 pb-10">
+            @Body
+        </MudContainer>
+    </MudMainContent>
+</MudLayout>
+
+@code {
+    private bool _drawerOpen = true;
+    private bool _isDarkMode;
+    private MudThemeProvider _mudThemeProvider = null!;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _isDarkMode = await _mudThemeProvider.GetSystemDarkModeAsync();
+            StateHasChanged();
+        }
+    }
+
+    private void ToggleDrawer() => _drawerOpen = !_drawerOpen;
+    private void ToggleTheme() => _isDarkMode = !_isDarkMode;
+
+    private readonly MudTheme _theme = new()
+    {
+        PaletteLight = new PaletteLight
+        {
+            Primary             = "#1565C0",
+            PrimaryContrastText = "#FFFFFF",
+            Secondary           = "#00ACC1",
+            Tertiary            = "#7E57C2",
+            Background          = "#F5F7FA",
+            Surface             = "#FFFFFF",
+            AppbarBackground    = "#0D1B2A",
+            AppbarText          = "#FFFFFF",
+            DrawerBackground    = "#FFFFFF",
+            DrawerText          = "#374151",
+            TextPrimary         = "#111827",
+            TextSecondary       = "#6B7280",
+            Divider             = "#E5E7EB",
+            ActionDefault       = "#6B7280",
+        },
+        PaletteDark = new PaletteDark
+        {
+            Primary             = "#42A5F5",
+            PrimaryContrastText = "#0D1117",
+            Secondary           = "#26C6DA",
+            Tertiary            = "#9575CD",
+            Background          = "#0F1117",
+            Surface             = "#1C1E2B",
+            AppbarBackground    = "#0A0D14",
+            AppbarText          = "#F9FAFB",
+            DrawerBackground    = "#1C1E2B",
+            DrawerText          = "#D1D5DB",
+            TextPrimary         = "#F9FAFB",
+            TextSecondary       = "#9CA3AF",
+            Divider             = "#374151",
+            ActionDefault       = "#9CA3AF",
+        },
+        Typography = new Typography
+        {
+            Default = new DefaultTypography { FontFamily = ["Inter", "Roboto", "sans-serif"] },
+            H4      = new H4Typography      { FontFamily = ["Inter", "Roboto", "sans-serif"], FontWeight = "700" },
+            H5      = new H5Typography      { FontFamily = ["Inter", "Roboto", "sans-serif"], FontWeight = "700" },
+            H6      = new H6Typography      { FontFamily = ["Inter", "Roboto", "sans-serif"], FontWeight = "600" },
+        }
+    };
+}

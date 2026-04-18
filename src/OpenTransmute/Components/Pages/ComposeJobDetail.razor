@@ -1,0 +1,277 @@
+@page "/compose/jobs/{JobId:guid}"
+@inject JobStore JobStore
+@inject JobQueue JobQueue
+@inject LlmSettingsService LlmSettings
+@inject ISnackbar Snackbar
+@inject OpenTransmute.Jobs.ComposeJobPersistenceService ComposeJobPersistence
+@inject NavigationManager Nav
+@implements IDisposable
+@namespace OpenTransmute.Components.Pages
+
+<PageTitle>Compose Job — OpenTransmute</PageTitle>
+
+@if (_job is null)
+{
+    <MudText>Job not found.</MudText>
+    return;
+}
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-1" Spacing="2">
+    <MudText Typo="Typo.h5">@(_job.Options.SourceLabel ?? _job.Options.OutputName)</MudText>
+    <MudChip T="string" Size="Size.Small" Color="@StatusColor(_job.Status)">@_job.Status</MudChip>
+</MudStack>
+<MudText Typo="Typo.body2" Class="mb-4 mud-text-secondary">
+    @_job.Options.Orchestrator
+    @if (_job.Options.Model is not null)
+    {
+        <span> · @_job.Options.Model</span>
+    }
+    @if (_job.TotalElapsed.HasValue)
+    {
+        <span> · Elapsed: @_job.TotalElapsed.Value.ToString(@"mm\:ss")</span>
+    }
+</MudText>
+
+<!-- Log -->
+<MudText Typo="Typo.subtitle2" Class="mb-1">Log</MudText>
+<MudPaper Elevation="1" Class="pa-3 mb-4" Style="max-height:300px;overflow-y:auto;background:#1e1e1e">
+    @foreach (var line in _job.LogLines)
+    {
+        <div style="color:#d4d4d4;font-family:monospace;font-size:0.75rem;white-space:pre-wrap">@line</div>
+    }
+    <div @ref="_logBottom"></div>
+</MudPaper>
+
+<!-- Output -->
+@if (!string.IsNullOrWhiteSpace(_job.Output))
+{
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-1">
+        <MudText Typo="Typo.subtitle2">Output</MudText>
+        <MudIconButton Icon="@(_editingOutput? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Edit)"
+                       Size="Size.Small"
+                       Title="@(_editingOutput ? "View mode" : "Edit output")"
+                       Color="@(_editingOutput ? Color.Warning : Color.Default)"
+                       OnClick="@ToggleOutputEdit" />
+        @if (_editingOutput)
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Save"
+                       OnClick="@CommitOutputEdit">
+                Save edits
+            </MudButton>
+            <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="@CancelOutputEdit">Cancel</MudButton>
+        }
+    </MudStack>
+
+    @if (_editingOutput)
+    {
+        <MudTextField T="string"
+                      @bind-Value="_outputDraft"
+                      Lines="30"
+                      Style="font-family:monospace;font-size:0.8rem"
+                      FullWidth="true"
+                      Variant="Variant.Outlined"
+                      Class="mb-4" />
+    }
+    else
+    {
+        <MudPaper Elevation="1" Class="pa-3 mb-4" Style="max-height:600px;overflow-y:auto">
+            <MudMarkdown Value="@EffectiveOutput" />
+        </MudPaper>
+    }
+
+    <!-- Implement panel -->
+    <MudCard Elevation="2" Style="max-width:720px">
+        <MudCardHeader>
+            <CardHeaderContent>
+                <MudText Typo="Typo.subtitle1" Style="font-weight:600">Implement</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    Use the thick model to write actual code from this design.
+                </MudText>
+            </CardHeaderContent>
+        </MudCardHeader>
+        <MudCardContent>
+            <MudGrid Spacing="3">
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="_outputDirectory" Label="Output Directory" Required="true"
+                                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.FolderOpen"
+                                  Placeholder="C:\Projects\MyNewApp"
+                                  HelperText="Absolute path where the implementation files will be written" />
+                </MudItem>
+            </MudGrid>
+        </MudCardContent>
+        <MudCardActions Class="pa-4">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="3">
+                <MudButton Variant="Variant.Filled" Color="Color.Secondary" Size="Size.Large"
+                           StartIcon="@Icons.Material.Filled.Code"
+                           OnClick="RunImplement"
+                           Disabled="@(string.IsNullOrWhiteSpace(_outputDirectory) || _implementing)">
+                    @(_implementing ? "Starting…" : "Implement")
+                </MudButton>
+
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                    <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small"
+                             Color="@(LlmSettings.Orchestrator == OrchestratorType.ClaudeCode ? Color.Primary
+                                                                                      : LlmSettings.Orchestrator == OrchestratorType.Ollama ? Color.Secondary
+                                                                                      : Color.Tertiary)" />
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                        @LlmSettings.Orchestrator · Thick model
+                        @if (!string.IsNullOrWhiteSpace(LlmSettings.ThickModel))
+                        {
+                            <span> (@LlmSettings.ThickModel)</span>
+                        }
+                    </MudText>
+                    <MudButton Variant="Variant.Text" Size="Size.Small" Href="/settings">Change</MudButton>
+                </MudStack>
+            </MudStack>
+        </MudCardActions>
+    </MudCard>
+}
+else if (_job.Status == JobStatus.Failed && _job.ErrorMessage is not null)
+{
+    <MudAlert Severity="Severity.Error">@_job.ErrorMessage</MudAlert>
+}
+
+@code {
+    [Parameter] public Guid JobId { get; set; }
+
+    private ComposeJob? _job;
+    private PeriodicTimer? _ticker;
+    private ElementReference _logBottom;
+    private string _outputDirectory = string.Empty;
+    private bool _implementing;
+
+    // Output editing
+    private bool _editingOutput;
+    private string _outputDraft = string.Empty;
+
+    private string EffectiveOutput => _job?.Output ?? string.Empty;
+
+    private void ToggleOutputEdit()
+    {
+        if (_editingOutput)
+        {
+            _editingOutput = false;
+        }
+        else
+        {
+            _outputDraft = EffectiveOutput;
+            _editingOutput = true;
+        }
+    }
+
+    private async Task CommitOutputEdit()
+    {
+        if (_job is null) return;
+        _job.Output = _outputDraft;
+        _editingOutput = false;
+
+        try
+        {
+            await ComposeJobPersistence.UpdateOutputAsync(_job.Id, _outputDraft);
+
+            string outputDir = Path.Combine(_job.Options.OutputRoot, "Output", "Composition", _job.Options.OutputName);
+            Directory.CreateDirectory(outputDir);
+            string outputPath = Path.Combine(outputDir, "compose-output.md");
+            await File.WriteAllTextAsync(outputPath, _outputDraft);
+            Snackbar.Add($"Saved", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to save: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void CancelOutputEdit()
+    {
+        _editingOutput = false;
+    }
+
+    [Inject] private IJSRuntime JS { get; set; } = null!;
+
+    protected override void OnInitialized()
+    {
+        _job = JobStore.GetCompose(JobId);
+        if (_job is not null)
+            _job.OnChanged += OnJobChanged;
+
+        if (_job?.Status == JobStatus.Running)
+            _ = TickAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_job?.Status == JobStatus.Running)
+            await JS.InvokeVoidAsync("scrollLogToBottom", _logBottom);
+    }
+
+    private void OnJobChanged()
+    {
+        if (_editingOutput)
+            return; // suppress external renders while editing
+
+        if (_job?.Status == JobStatus.Running && _ticker is null)
+            _ = TickAsync();
+
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async Task TickAsync()
+    {
+        _ticker = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        try
+        {
+            while (await _ticker.WaitForNextTickAsync())
+            {
+                if (_job?.Status is not JobStatus.Running) break;
+
+                if (!_editingOutput)
+                    await InvokeAsync(StateHasChanged);
+            }
+        }
+        finally
+        {
+            _ticker.Dispose();
+            _ticker = null;
+        }
+    }
+
+    private async Task RunImplement()
+    {
+        if (_job is null || string.IsNullOrWhiteSpace(_outputDirectory)) return;
+        _implementing = true;
+
+        var options = new ImplementOptions
+        {
+            SpecContent = EffectiveOutput,
+            OutputDirectory = _outputDirectory,
+            ProjectName = Path.GetFileName(_outputDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)),
+            Label = $"Implement: {_job.Options.OutputName}",
+            Orchestrator = LlmSettings.Orchestrator,
+            Model = string.IsNullOrWhiteSpace(LlmSettings.ThickModel) ? null : LlmSettings.ThickModel,
+            OpenAiApiKey = string.IsNullOrWhiteSpace(LlmSettings.OpenAiApiKey) ? null : LlmSettings.OpenAiApiKey,
+            OpenAiEndpoint = string.IsNullOrWhiteSpace(LlmSettings.OpenAiEndpoint) ? null : LlmSettings.OpenAiEndpoint,
+            TimeoutMinutes = LlmSettings.TimeoutMinutes
+        };
+
+        var implementJob = new ImplementJob { Options = options };
+        JobStore.Add(implementJob);
+        await JobQueue.EnqueueAsync(implementJob);
+        Nav.NavigateTo($"/implement/jobs/{implementJob.Id}");
+    }
+
+    private static Color StatusColor(JobStatus s) => s switch
+    {
+        JobStatus.Completed => Color.Success,
+        JobStatus.Failed => Color.Error,
+        JobStatus.Running => Color.Info,
+        _ => Color.Default
+    };
+
+    public void Dispose()
+    {
+        if (_job is not null)
+            _job.OnChanged -= OnJobChanged;
+        _ticker?.Dispose();
+    }
+}
