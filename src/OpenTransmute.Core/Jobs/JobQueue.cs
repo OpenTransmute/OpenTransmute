@@ -26,6 +26,10 @@ public class JobQueue
     public ValueTask EnqueueAsync(ImplementJob job, CancellationToken ct = default)
         => _channel.Writer.WriteAsync(job, ct);
 
+    /// <summary>Enqueues a verify job for processing.</summary>
+    public ValueTask EnqueueAsync(VerifyJob job, CancellationToken ct = default)
+        => _channel.Writer.WriteAsync(job, ct);
+
     /// <summary>Reads all jobs from the channel as an async enumerable.</summary>
     public IAsyncEnumerable<object> ReadAllAsync(CancellationToken ct)
         => _channel.Reader.ReadAllAsync(ct);

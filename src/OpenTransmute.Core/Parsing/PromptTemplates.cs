@@ -24,6 +24,7 @@ public sealed class PromptTemplates
     private readonly string _composeTemplate;
     private readonly string _transmuteGuards;
     private readonly string _transmuteIgnore;
+    private readonly string _verifyTemplate;
 
     #endregion
 
@@ -38,6 +39,7 @@ public sealed class PromptTemplates
         _composeTemplate = ReadResource(asm, "compose.md");
         _transmuteGuards = ReadResource(asm, "transmute.md");
         _transmuteIgnore = ReadResource(asm, ".transmuteignore");
+        _verifyTemplate  = ReadResource(asm, "verify.md");
     }
 
     #endregion
@@ -55,6 +57,11 @@ public sealed class PromptTemplates
     public string TransmuteGuards => _transmuteGuards;
 
     public string TransmuteIgnore => _transmuteIgnore;
+
+    /// <summary>
+    /// Template for verifying decomposition output accuracy against source code.
+    /// </summary>
+    public string VerifyTemplate => _verifyTemplate;
 
     #endregion
 
@@ -95,12 +102,20 @@ public sealed class PromptTemplates
 
             string? expansionDiscovery = ExtractLine(body, @"\*\*Expansion Discovery:\*\*");
             string? outputPattern      = ExtractLine(body, @"\*\*Expansion Output Pattern:\*\*");
+            string? synthesisSourceRaw = ExtractLine(body, @"\*\*Synthesis Source:\*\*");
+            string? synthesisPattern   = ExtractLine(body, @"\*\*Synthesis Output Pattern:\*\*");
+            string? outputMode         = ExtractLine(body, @"\*\*Output Mode:\*\*");
+            bool useAppendResults      = string.Equals(outputMode?.Trim(), "append-results", StringComparison.OrdinalIgnoreCase);
 
             List<string> codeBlocks             = ExtractCodeBlocks(body);
             IReadOnlyList<int> priorContextPhases = ParsePriorContext(priorCtxRaw);
 
             bool isExpansion = !string.IsNullOrWhiteSpace(expansionDiscovery)
                               && !string.IsNullOrWhiteSpace(outputPattern)
+                              && codeBlocks.Count >= 2;
+
+            bool isSynthesis = !string.IsNullOrWhiteSpace(synthesisSourceRaw)
+                              && !string.IsNullOrWhiteSpace(synthesisPattern)
                               && codeBlocks.Count >= 2;
 
             PhaseSpec phase;
@@ -121,6 +136,23 @@ public sealed class PromptTemplates
                     TemplatePrompt     = codeBlocks[1]
                 };
             }
+            else if (isSynthesis)
+            {
+                int synthesisSource = int.TryParse(synthesisSourceRaw!.Trim(), out int src) ? src : 0;
+                phase = new PhaseSpec
+                {
+                    Number               = num,
+                    Title                = title,
+                    Goal                 = goal,
+                    ModelWeight          = modelWeight.Trim().ToLowerInvariant(),
+                    PriorContextPhases   = priorContextPhases,
+                    IsSynthesis          = true,
+                    SynthesisSourcePhase = synthesisSource,
+                    OutputPattern        = synthesisPattern!.Trim(),
+                    ChunkPrompt          = codeBlocks[0],
+                    MergePrompt          = codeBlocks[1]
+                };
+            }
             else
             {
                 phase = new PhaseSpec
@@ -131,7 +163,8 @@ public sealed class PromptTemplates
                     ModelWeight        = modelWeight.Trim().ToLowerInvariant(),
                     PriorContextPhases = priorContextPhases,
                     Prompt             = codeBlocks.FirstOrDefault() ?? string.Empty,
-                    IsExpansion        = false
+                    IsExpansion        = false,
+                    UseAppendResults   = useAppendResults
                 };
             }
 

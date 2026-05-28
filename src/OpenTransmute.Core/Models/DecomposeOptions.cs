@@ -48,6 +48,14 @@ public class DecomposeOptions
     /// <summary>Inclusive last phase to run. Null = run to the end.</summary>
     public int? EndPhase       { get; set; }
 
+    /// <summary>
+    /// 1-based expansion item index to resume from within an expansion phase (e.g. Phase 3).
+    /// When set, the discovery step is loaded from the existing 03-00-discovery.json on disk
+    /// instead of re-running it, and items below this index are skipped.
+    /// 0 or null = run all items from the beginning.
+    /// </summary>
+    public int? StartItem      { get; set; }
+
     /// <summary>Maximum agentic tool-use rounds per phase before the model must produce output.</summary>
     public int MaxTurns        { get; set; } = 20;
 
@@ -90,6 +98,45 @@ public class DecomposeOptions
     /// AI would not discover on its own.
     /// </summary>
     public string? Hints { get; set; }
+
+    /// <summary>
+    /// Per-phase overrides for engine and output mode. Keyed by phase number (0–7).
+    /// Phases not present in the dictionary use the global settings on this options object.
+    /// </summary>
+    public Dictionary<int, PhaseOverride>? PhaseOverrides { get; set; }
+
+    #endregion
+
+    #region Methods
+
+    /// <summary>
+    /// Resolves the orchestrator for a given phase, checking per-phase overrides first.
+    /// </summary>
+    public OrchestratorType ResolveOrchestrator(int phaseNumber)
+    {
+        if (PhaseOverrides is not null &&
+            PhaseOverrides.TryGetValue(phaseNumber, out PhaseOverride? ov) &&
+            ov.Orchestrator is not null)
+        {
+            return ov.Orchestrator.Value;
+        }
+        return Orchestrator;
+    }
+
+    /// <summary>
+    /// Resolves the AppendResults setting for a given phase, checking per-phase overrides first,
+    /// then falling back to the phase spec's default from decompose.md.
+    /// </summary>
+    public bool ResolveAppendResults(int phaseNumber, bool phaseSpecDefault)
+    {
+        if (PhaseOverrides is not null &&
+            PhaseOverrides.TryGetValue(phaseNumber, out PhaseOverride? ov) &&
+            ov.UseAppendResults is not null)
+        {
+            return ov.UseAppendResults.Value;
+        }
+        return phaseSpecDefault;
+    }
 
     #endregion
 }

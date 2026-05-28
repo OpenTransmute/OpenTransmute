@@ -18,6 +18,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<SavedComposeJob> ComposeJobs => Set<SavedComposeJob>();
     public DbSet<SavedImplementJob> ImplementJobs => Set<SavedImplementJob>();
     public DbSet<UserSettings> UserSettings => Set<UserSettings>();
+    public DbSet<Product> Products => Set<Product>();
 
     #endregion
 
@@ -35,6 +36,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
              .WithOne(i => i.Project)
              .HasForeignKey(i => i.ProjectId)
              .OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(p => p.Product)
+             .WithMany(pr => pr.Projects)
+             .HasForeignKey(p => p.ProductId)
+             .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<InventoryItem>(e =>
@@ -79,6 +84,12 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<UserSettings>(e =>
         {
             e.HasKey(u => u.Id);
+        });
+
+        modelBuilder.Entity<Product>(e =>
+        {
+            e.HasKey(p => p.Id);
+            e.Property(p => p.Name).IsRequired();
         });
     }
 

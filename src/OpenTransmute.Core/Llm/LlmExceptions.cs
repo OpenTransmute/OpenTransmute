@@ -9,6 +9,16 @@ public class LlmRateLimitException(TimeSpan? retryAfter = null)
 {
     /// <summary>Minimum time to wait before the next retry attempt.</summary>
     public TimeSpan RetryAfter { get; } = retryAfter ?? TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Returns <c>true</c> if the message text contains any known rate-limit indicator —
+    /// "rate limit", HTTP 429, or "quota". Centralizes detection logic so all executors
+    /// agree on what constitutes a rate-limit signal.
+    /// </summary>
+    public static bool IsRateLimitSignal(string message) =>
+        message.Contains("rate limit", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("429") ||
+        message.Contains("quota", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>

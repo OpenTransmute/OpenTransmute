@@ -2,7 +2,7 @@ using System.ClientModel;
 using System.ClientModel.Primitives;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
-using System.Text.Json;
+using System.Text;
 using Microsoft.Extensions.AI;
 using OpenAI;
 using OpenTransmute.Models;
@@ -70,6 +70,14 @@ public sealed class OpenAiChatExecutor : ILlmExecutor
             ModelId         = ctx.Model,
         };
 
+        // Stream log — captures the full request/response cycle for diagnostics.
+        using StreamDiagnosticLog streamLog = StreamDiagnosticLog.Create(ctx, "openai", _logger);
+        streamLog.WriteHeader(ctx,
+            ("Endpoint", ctx.Endpoint ?? "(default)"),
+            ("ToolCount", tools.Count.ToString()));
+        streamLog.WriteLine($"=== SYSTEM PROMPT ({ctx.SystemPrompt?.Length ?? 0} chars) ===\n{ctx.SystemPrompt ?? "(none)"}\n");
+        streamLog.WriteLine($"=== USER PROMPT ({ctx.UserPrompt.Length:N0} chars) ===\n{ctx.UserPrompt}\n");
+
         // Capture result and failure outside the try/catch so yields can follow.
         ChatResponse? result = null;
         string? failureMessage = null;
@@ -79,10 +87,9 @@ public sealed class OpenAiChatExecutor : ILlmExecutor
             result = await client.GetResponseAsync(messages, options, ct);
         }
         catch (OperationCanceledException) { throw; }
-        catch (Exception ex) when (
-            ex.Message.Contains("rate limit", StringComparison.OrdinalIgnoreCase) ||
-            ex.Message.Contains("429"))
+        catch (Exception ex) when (LlmRateLimitException.IsRateLimitSignal(ex.Message))
         {
+            streamLog.WriteLine($"\n\n=== RATE LIMIT ===\n{ex.Message}");
             // Throw so the caller's RetryPolicy can intercept and retry.
             throw new LlmRateLimitException();
         }
@@ -92,6 +99,7 @@ public sealed class OpenAiChatExecutor : ILlmExecutor
             // request details from the OpenAI SDK) can contain endpoint URLs or auth tokens.
             _logger.LogError("OpenAI call failed: {Message}", ex.Message);
             failureMessage = ex.Message;
+            streamLog.WriteLine($"\n\n=== FAILED ===\n{ex.Message}");
         }
 
         if (failureMessage is not null)
@@ -103,6 +111,7 @@ public sealed class OpenAiChatExecutor : ILlmExecutor
         string? content = result!.Text;
         if (string.IsNullOrWhiteSpace(content))
         {
+            streamLog.WriteLine("\n\n=== FAILED — empty content ===");
             yield return new LlmFailed("LLM returned empty content.");
             yield break;
         }
@@ -110,6 +119,10 @@ public sealed class OpenAiChatExecutor : ILlmExecutor
         TokenUsage tokens = ExtractTokenUsage(result);
         string tokenLog = $"{tokens.Total:N0} tokens" +
             (tokens.CostUsd.HasValue ? $" (~${tokens.CostUsd:F4})" : string.Empty);
+
+        streamLog.WriteLine($"=== COMPLETED ({content.Length:N0} chars, {tokenLog}) ===");
+        streamLog.WriteLine(content);
+
         yield return new LlmLine(tokenLog);
 
         yield return new LlmCompleted(content, tokens);

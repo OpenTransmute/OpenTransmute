@@ -3,6 +3,7 @@
 @inject JobStore JobStore
 @inject LlmSettingsService LlmSettings
 @inject NavigationManager Nav
+@inject PromptTemplates Phases
 @namespace OpenTransmute.Components.Pages
 
 <PageTitle>Decompose — OpenTransmute</PageTitle>
@@ -44,6 +45,12 @@
                     </MudItem>
 
                     <MudItem xs="12" sm="2">
+                        <MudNumericField @bind-Value="_options.StartItem" Label="Start Item"
+                                         Min="0"
+                                         HelperText="0 = all items" />
+                    </MudItem>
+
+                    <MudItem xs="12" sm="2">
                         <MudNumericField @bind-Value="_options.MaxTurns" Label="Max Turns"
                                          Min="5" Max="100"
                                          HelperText="Rounds per phase" />
@@ -53,6 +60,49 @@
                         <MudNumericField @bind-Value="_options.MaxOutputTokens" Label="Max Tokens"
                                          Min="0" Max="32768"
                                          HelperText="0 = auto" />
+                    </MudItem>
+
+                    <MudItem xs="12">
+                        <MudExpansionPanels Elevation="0">
+                            <MudExpansionPanel Text="Phase Configuration"
+                                               Icon="@Icons.Material.Filled.Tune">
+                                <MudText Typo="Typo.caption" Class="mb-3 mud-text-secondary">
+                                    Override the engine or AppendResults mode for individual phases.
+                                    Blank = use the global engine from Settings.
+                                </MudText>
+                                <MudSimpleTable Dense="true" Hover="true" Bordered="true">
+                                    <thead>
+                                        <tr>
+                                            <th>Phase</th>
+                                            <th style="width:200px">Engine Override</th>
+                                            <th style="width:140px">AppendResults</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var pc in _phaseConfigs)
+                                        {
+                                            <tr>
+                                                <td>@pc.Number — @pc.Title</td>
+                                                <td>
+                                                    <MudSelect T="OrchestratorType?" @bind-Value="pc.Orchestrator"
+                                                               Dense="true" Variant="Variant.Text"
+                                                               Placeholder="(global)" Clearable="true" Margin="Margin.Dense">
+                                                        @foreach (var orch in Enum.GetValues<OrchestratorType>())
+                                                        {
+                                                            <MudSelectItem T="OrchestratorType?" Value="@orch">@orch</MudSelectItem>
+                                                        }
+                                                    </MudSelect>
+                                                </td>
+                                                <td>
+                                                    <MudCheckBox T="bool" @bind-Value="pc.AppendResults"
+                                                                 Dense="true" />
+                                                </td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </MudSimpleTable>
+                            </MudExpansionPanel>
+                        </MudExpansionPanels>
                     </MudItem>
 
                     <MudItem xs="12">
@@ -128,6 +178,7 @@
 @code {
     private DecomposeOptions _options = new();
     private bool _submitting;
+    private List<PhaseConfig> _phaseConfigs = new();
 
     protected override void OnInitialized()
     {
@@ -137,6 +188,18 @@
         _options.RegularMaxOutputTokens = LlmSettings.RegularMaxOutputTokens;
         _options.ThinMaxOutputTokens    = LlmSettings.ThinMaxOutputTokens;
         _options.TimeoutMinutes         = LlmSettings.TimeoutMinutes;
+
+        _phaseConfigs = Phases.Phases.Select(p =>
+            new PhaseConfig { Number = p.Number, Title = p.Title }).ToList();
+    }
+
+    /// <summary>Mutable row backing the per-phase configuration table.</summary>
+    private sealed class PhaseConfig
+    {
+        public int Number { get; init; }
+        public string Title { get; init; } = string.Empty;
+        public OrchestratorType? Orchestrator { get; set; }
+        public bool AppendResults { get; set; }
     }
 
     private async Task SubmitJob()
@@ -149,6 +212,20 @@
         _options.ThinModel      = LlmSettings.ThinModel;
         _options.OpenAiApiKey   = LlmSettings.OpenAiApiKey;
         _options.OpenAiEndpoint = LlmSettings.OpenAiEndpoint;
+
+        // Build per-phase overrides from the configuration table.
+        Dictionary<int, PhaseOverride> overrides = new();
+        foreach (PhaseConfig pc in _phaseConfigs)
+        {
+            PhaseOverride po = new()
+            {
+                Orchestrator = pc.Orchestrator,
+                UseAppendResults = pc.AppendResults ? true : null
+            };
+            if (!po.IsEmpty)
+                overrides[pc.Number] = po;
+        }
+        _options.PhaseOverrides = overrides.Count > 0 ? overrides : null;
 
         _submitting = true;
         var job = new DecomposeJob { Options = _options };

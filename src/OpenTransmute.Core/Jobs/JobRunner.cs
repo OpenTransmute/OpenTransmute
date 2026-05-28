@@ -51,6 +51,10 @@ public class JobRunner(
                     case ImplementJob ij:
                         await RunImplementJobAsync(ij, stoppingToken);
                         break;
+
+                    case VerifyJob vj:
+                        await RunVerifyJobAsync(vj, stoppingToken);
+                        break;
                 }
             }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
@@ -80,19 +84,27 @@ public class JobRunner(
                     ij2.NotifyChanged();
                     await implementPersistence.SaveAsync(ij2, stoppingToken);
                 }
+                else if (job is VerifyJob vj2)
+                {
+                    vj2.Status       = JobStatus.Failed;
+                    vj2.CompletedAt  = DateTime.UtcNow;
+                    vj2.ErrorMessage = ex.Message;
+                    vj2.NotifyChanged();
+                }
             }
         }
     }
 
     private async Task RunDecomposeJobAsync(DecomposeJob job, CancellationToken ct)
     {
+        CancellationToken jobToken = job.CreateLinkedToken(ct);
         DecomposeOptions options = job.Options;
 
         ISourceFetcher fetcher = sourceFetchers.FirstOrDefault(f => f.CanHandle(options.Source))
             ?? throw new InvalidOperationException($"No source fetcher can handle: {options.Source}");
 
         job.AppendLog($"Fetching source: {options.Source}");
-        SourceResult sourceResult = await fetcher.FetchAsync(options.Source, options, ct);
+        SourceResult sourceResult = await fetcher.FetchAsync(options.Source, options, jobToken);
 
         string projectName = string.IsNullOrWhiteSpace(options.ProjectName)
             ? sourceResult.InferredProjectName
@@ -106,9 +118,9 @@ public class JobRunner(
         job.StartedAt = DateTime.UtcNow;
         job.NotifyChanged();
 
-        await ClearPhaseOutputsAsync(projectName, ct);
+        await ClearPhaseOutputsAsync(projectName, jobToken);
 
-        await foreach (PhaseEvent evt in orchestrator.RunAsync(job, ct))
+        await foreach (PhaseEvent evt in orchestrator.RunAsync(job, jobToken))
         {
             switch (evt)
             {
@@ -122,18 +134,18 @@ public class JobRunner(
                     job.PhaseCompleted(c.PhaseNumber, preview, c.Tokens);
                     job.AppendLog($"Phase {c.PhaseNumber} completed." +
                         (c.Tokens.Total > 0 ? $" [{c.Tokens.InputTokens:N0}→{c.Tokens.OutputTokens:N0} tokens]" : string.Empty));
-                    await decomposePersistence.SaveAsync(job, ct);
-                    await SavePhaseOutputAsync(projectName, c.PhaseNumber, c.OutputPath, ct);
+                    await decomposePersistence.SaveAsync(job, jobToken);
+                    await SavePhaseOutputAsync(projectName, c.PhaseNumber, c.OutputPath, jobToken);
 
                     if (c.PhaseNumber == InventoryPhaseNumber)
-                        await ImportInventoryAsync(job, options, c.OutputPath, sourceResult.LocalPath, ct);
+                        await ImportInventoryAsync(job, options, c.OutputPath, sourceResult.LocalPath, jobToken);
                     break;
 
                 case PhaseFailed f:
                     job.PhaseFailed(f.PhaseNumber, f.Error);
                     job.AppendLog($"Phase {f.PhaseNumber} FAILED: {f.Error}");
                     logger.LogError("Phase {Phase} failed for {Project}: {Error}", f.PhaseNumber, projectName, f.Error);
-                    await decomposePersistence.SaveAsync(job, ct);
+                    await decomposePersistence.SaveAsync(job, jobToken);
                     break;
 
                 case LogLine l:
@@ -147,7 +159,7 @@ public class JobRunner(
                 case ExpansionItemCompleted ec:
                     job.AppendLog($"  [{ec.PhaseNumber}] Group {ec.ItemIndex} done: {Path.GetFileName(ec.OutputPath)}" +
                         (ec.Tokens.Total > 0 ? $" [{ec.Tokens.Total:N0} tokens]" : string.Empty));
-                    await SavePhaseOutputAsync(projectName, ec.PhaseNumber, ec.OutputPath, ct);
+                    await SavePhaseOutputAsync(projectName, ec.PhaseNumber, ec.OutputPath, jobToken);
                     break;
             }
         }
@@ -159,7 +171,7 @@ public class JobRunner(
             job.AppendLog($"Total tokens: {job.TotalTokens.InputTokens:N0} in / {job.TotalTokens.OutputTokens:N0} out" +
                 (job.TotalTokens.CostUsd.HasValue ? $" | cost ~${job.TotalTokens.CostUsd:F4}" : string.Empty));
         job.NotifyChanged();
-        await decomposePersistence.SaveAsync(job, ct);
+        await decomposePersistence.SaveAsync(job, jobToken);
 
         if (sourceResult.IsTemporary && !options.KeepClone)
         {
@@ -170,25 +182,26 @@ public class JobRunner(
 
     private async Task RunComposeJobAsync(ComposeJob job, CancellationToken ct)
     {
+        CancellationToken jobToken = job.CreateLinkedToken(ct);
         job.Status = JobStatus.Running;
         job.StartedAt = DateTime.UtcNow;
         job.NotifyChanged();
 
-        await foreach (PhaseEvent evt in orchestrator.RunAsync(job, ct))
+        await foreach (PhaseEvent evt in orchestrator.RunAsync(job, jobToken))
         {
             switch (evt)
             {
                 case PhaseCompleted c:
                     job.TotalTokens += c.Tokens;
                     job.NotifyChanged();
-                    await composePersistence.SaveAsync(job, ct);
+                    await composePersistence.SaveAsync(job, jobToken);
                     break;
 
                 case PhaseFailed f:
                     job.Status = JobStatus.Failed;
                     job.ErrorMessage = f.Error;
                     job.NotifyChanged();
-                    await composePersistence.SaveAsync(job, ct);
+                    await composePersistence.SaveAsync(job, jobToken);
                     break;
 
                 case LogLine l:
@@ -203,30 +216,31 @@ public class JobRunner(
             job.CompletedAt = DateTime.UtcNow;
         }
         job.NotifyChanged();
-        await composePersistence.SaveAsync(job, ct);
+        await composePersistence.SaveAsync(job, jobToken);
     }
 
     private async Task RunImplementJobAsync(ImplementJob job, CancellationToken ct)
     {
+        CancellationToken jobToken = job.CreateLinkedToken(ct);
         job.Status = JobStatus.Running;
         job.StartedAt = DateTime.UtcNow;
         job.NotifyChanged();
 
-        await foreach (PhaseEvent evt in orchestrator.RunAsync(job, ct))
+        await foreach (PhaseEvent evt in orchestrator.RunAsync(job, jobToken))
         {
             switch (evt)
             {
                 case PhaseCompleted c:
                     job.TotalTokens += c.Tokens;
                     job.NotifyChanged();
-                    await implementPersistence.SaveAsync(job, ct);
+                    await implementPersistence.SaveAsync(job, jobToken);
                     break;
 
                 case PhaseFailed f:
                     job.Status = JobStatus.Failed;
                     job.ErrorMessage = f.Error;
                     job.NotifyChanged();
-                    await implementPersistence.SaveAsync(job, ct);
+                    await implementPersistence.SaveAsync(job, jobToken);
                     break;
 
                 case LogLine l:
@@ -241,7 +255,66 @@ public class JobRunner(
             job.CompletedAt = DateTime.UtcNow;
         }
         job.NotifyChanged();
-        await implementPersistence.SaveAsync(job, ct);
+        await implementPersistence.SaveAsync(job, jobToken);
+    }
+
+    private async Task RunVerifyJobAsync(VerifyJob job, CancellationToken ct)
+    {
+        CancellationToken jobToken = job.CreateLinkedToken(ct);
+        job.Status = JobStatus.Running;
+        job.StartedAt = DateTime.UtcNow;
+        job.NotifyChanged();
+
+        await foreach (PhaseEvent evt in orchestrator.RunAsync(job, jobToken))
+        {
+            switch (evt)
+            {
+                case PhaseStarted s:
+                    job.AppendLog($"--- Verifying: {s.PhaseName} ---");
+                    break;
+
+                case PhaseCompleted c:
+                    job.AppendLog($"Verified: complete." +
+                        (c.Tokens.Total > 0 ? $" [{c.Tokens.InputTokens:N0}→{c.Tokens.OutputTokens:N0} tokens]" : string.Empty));
+                    break;
+
+                case PhaseFailed f:
+                    job.AppendLog($"Verify FAILED: {f.Error}");
+                    break;
+
+                case LogLine l:
+                    job.AppendLog(l.Text);
+                    break;
+            }
+        }
+
+        job.Status = job.Documents.Any(d => d.Status == JobStatus.Failed)
+            ? JobStatus.Failed : JobStatus.Completed;
+        job.CompletedAt = DateTime.UtcNow;
+        if (job.TotalTokens.Total > 0 || job.TotalTokens.CostUsd.HasValue)
+            job.AppendLog($"Total tokens: {job.TotalTokens.InputTokens:N0} in / {job.TotalTokens.OutputTokens:N0} out" +
+                (job.TotalTokens.CostUsd.HasValue ? $" | cost ~${job.TotalTokens.CostUsd:F4}" : string.Empty));
+        job.NotifyChanged();
+
+        // Stamp VerifiedAt on the project if the verify run succeeded.
+        if (job.Status == JobStatus.Completed)
+        {
+            try
+            {
+                await using AppDbContext db = await dbFactory.CreateDbContextAsync(jobToken);
+                DecomposedProject? project = await db.Projects
+                    .FirstOrDefaultAsync(p => p.Name == job.Options.ProjectName, jobToken);
+                if (project is not null)
+                {
+                    project.VerifiedAt = DateTime.UtcNow;
+                    await db.SaveChangesAsync(jobToken);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to stamp VerifiedAt for {Project}", job.Options.ProjectName);
+            }
+        }
     }
 
     private async Task ImportInventoryAsync(

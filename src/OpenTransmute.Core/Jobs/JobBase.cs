@@ -14,6 +14,7 @@ public abstract class JobBase
     private const int MaxLogLines = 2000;
     private readonly object _logLock = new();
     private readonly List<string> _logLines = new();
+    private CancellationTokenSource? _cts;
 
     #endregion
 
@@ -86,6 +87,47 @@ public abstract class JobBase
     public string[] GetLogSnapshot()
     {
         lock (_logLock) { return [.. _logLines]; }
+    }
+
+    /// <summary>
+    /// Creates a linked <see cref="CancellationToken"/> that fires when either the
+    /// job is aborted or the host <paramref name="hostToken"/> is cancelled.
+    /// Call once per job execution — subsequent calls return tokens linked to the same source.
+    /// </summary>
+    /// <param name="hostToken">The host-level stopping token from the BackgroundService.</param>
+    /// <returns>A token the runner should pass to all async operations.</returns>
+    public CancellationToken CreateLinkedToken(CancellationToken hostToken)
+    {
+        _cts?.Dispose();
+        _cts = CancellationTokenSource.CreateLinkedTokenSource(hostToken);
+        return _cts.Token;
+    }
+
+    /// <summary>
+    /// Signals cancellation for a running job. Safe to call from any thread.
+    /// Has no effect on jobs that are already in a terminal state or were never started.
+    /// </summary>
+    public void Abort()
+    {
+        _cts?.Cancel();
+    }
+
+    /// <summary>
+    /// Forces a stuck job into the Failed state without signalling cancellation.
+    /// Use for jobs restored from disk that were mid-run when the app restarted.
+    /// </summary>
+    /// <param name="reason">Optional failure message appended to the log.</param>
+    public void ForceFail(string? reason = null)
+    {
+        if (Status is JobStatus.Completed or JobStatus.Failed)
+            return;
+
+        string message = reason ?? "Job force-failed by user.";
+        Status = JobStatus.Failed;
+        CompletedAt = DateTime.UtcNow;
+        ErrorMessage = message;
+        AppendLog(message);
+        NotifyChanged();
     }
 
     #endregion

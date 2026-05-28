@@ -9,7 +9,7 @@ internal static class SettingsCommand
     {
         var cmd = new Command("settings", "Show or update persisted CLI settings");
 
-        var orchOpt      = new Option<OrchestratorType?>("--orchestrator") { Description = "Default engine (ClaudeCode | OpenAI | Ollama)" };
+        var orchOpt      = new Option<OrchestratorType?>("--orchestrator") { Description = "Default engine (ClaudeCode | CopilotCli | OpenAI | Ollama)" };
         var endpointOpt  = new Option<string?>("--endpoint") { Description = "Default OpenAI-compatible endpoint URL" };
         var thickOpt     = new Option<string?>("--thick-model") { Description = "Default model for heavy phases" };
         var regularOpt   = new Option<string?>("--regular-model") { Description = "Default model for normal phases" };
@@ -59,7 +59,7 @@ internal static class SettingsCommand
                 if (ethos is not null)    settings.UserEthos       = ethos.Length == 0 ? null : ethos;
 
                 store.Save(settings);
-                Console.WriteLine($"Settings saved to {store.Path}");
+                Console.WriteLine("Settings saved to database.");
                 Console.WriteLine();
             }
 
@@ -74,9 +74,8 @@ internal static class SettingsCommand
             Console.WriteLine($"  HTTP timeout:      {settings.TimeoutMinutes} min");
             Console.WriteLine($"  User ethos:        {(string.IsNullOrWhiteSpace(settings.UserEthos) ? "(not set)" : settings.UserEthos.Length > 80 ? settings.UserEthos[..80] + "…" : settings.UserEthos)}");
             Console.WriteLine();
-            Console.WriteLine("Note: API keys are never saved to disk.");
-            Console.WriteLine("      Pass --api-key on each command or set OPENAI_API_KEY.");
-            Console.WriteLine($"Settings file: {store.Path}");
+            Console.WriteLine("Note: API keys are never saved. Pass --api-key on each command or set OPENAI_API_KEY.");
+            Console.WriteLine("Settings are shared with the Blazor UI (stored in DB/opentransmute.db).");
 
             return 0;
         });

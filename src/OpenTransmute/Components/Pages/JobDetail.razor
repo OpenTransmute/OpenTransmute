@@ -3,6 +3,9 @@
 @inject NavigationManager Nav
 @inject JobQueue JobQueue
 @inject IJSRuntime JS
+@inject LlmSettingsService LlmSettings
+@inject PromptTemplates PhaseTemplates
+@inject JobPersistenceService Persistence
 @implements IDisposable
 @namespace OpenTransmute.Components.Pages
 
@@ -15,16 +18,104 @@
 }
 
 <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-1">
-    <MudText Typo="Typo.h5">@_job.Options.ProjectName</MudText>
-    <MudChip T="string" Size="Size.Small" Color="@StatusColor(_job.Status)">@_job.Status</MudChip>
-</MudStack>
-<MudText Typo="Typo.body2" Class="mb-4">
-    Source: @_job.Options.Source
-    @if (_job.TotalElapsed.HasValue)
+    @if (_editing)
     {
-        <span> · Elapsed: @_job.TotalElapsed.Value.ToString(@"mm\:ss")</span>
+        <MudTextField @bind-Value="_editProjectName" Label="Project Name"
+                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width:300px" />
     }
-</MudText>
+    else
+    {
+        <MudText Typo="Typo.h5">@_job.Options.ProjectName</MudText>
+    }
+    <MudChip T="string" Size="Size.Small" Color="@StatusColor(_job.Status)">@_job.Status</MudChip>
+    @if (_job.Status is JobStatus.Running or JobStatus.Pending)
+    {
+        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Error"
+                   StartIcon="@Icons.Material.Filled.Stop"
+                   OnClick="AbortJob">
+            Abort
+        </MudButton>
+    }
+    else if (_job.Status is not JobStatus.Running and not JobStatus.Pending)
+    {
+        @if (_editing)
+        {
+            <MudIconButton Icon="@Icons.Material.Filled.Save" Color="Color.Success"
+                           Size="Size.Small" OnClick="SaveEditAsync" Disabled="_saving" />
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Color="Color.Default"
+                           Size="Size.Small" OnClick="CancelEdit" />
+        }
+        else
+        {
+            <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Default"
+                           Size="Size.Small" OnClick="StartEdit" />
+        }
+    }
+</MudStack>
+
+@if (_editing)
+{
+    <MudStack Spacing="2" Class="mb-4" Style="max-width:600px">
+        <MudTextField @bind-Value="_editSource" Label="Source" Variant="Variant.Outlined" Margin="Margin.Dense" />
+        <MudTextField @bind-Value="_editOutputRoot" Label="Output Root" Variant="Variant.Outlined" Margin="Margin.Dense" />
+        <MudTextField @bind-Value="_editCloneDirectory" Label="Clone Directory"
+                      Variant="Variant.Outlined" Margin="Margin.Dense" Placeholder="(system temp)" />
+    </MudStack>
+}
+else
+{
+    <MudText Typo="Typo.body2" Class="mb-4">
+        Source: @_job.Options.Source
+        @if (_job.TotalElapsed.HasValue)
+        {
+            <span> · Elapsed: @_job.TotalElapsed.Value.ToString(@"mm\:ss")</span>
+        }
+    </MudText>
+}
+
+@if (_job.Status is not JobStatus.Running and not JobStatus.Pending)
+{
+    <MudExpansionPanels Elevation="1" Class="mb-4">
+        <MudExpansionPanel Text="Re-run Settings — Per-Phase Configuration"
+                           Icon="@Icons.Material.Filled.Tune">
+            <MudText Typo="Typo.caption" Class="mb-3 mud-text-secondary">
+                Override the engine or AppendResults mode for individual phases before re-running.
+                Blank engine = use the original job's engine (@_job.Options.Orchestrator).
+            </MudText>
+            <MudSimpleTable Dense="true" Hover="true" Bordered="true">
+                <thead>
+                    <tr>
+                        <th>Phase</th>
+                        <th style="width:200px">Engine Override</th>
+                        <th style="width:140px">AppendResults</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var pc in _phaseConfigs)
+                    {
+                        <tr>
+                            <td>@pc.Number — @pc.Title</td>
+                            <td>
+                                <MudSelect T="OrchestratorType?" @bind-Value="pc.Orchestrator"
+                                           Dense="true" Variant="Variant.Text"
+                                           Placeholder="(original)" Clearable="true" Margin="Margin.Dense">
+                                    @foreach (var orch in Enum.GetValues<OrchestratorType>())
+                                    {
+                                        <MudSelectItem T="OrchestratorType?" Value="@orch">@orch</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </td>
+                            <td>
+                                <MudCheckBox T="bool" @bind-Value="pc.AppendResults"
+                                             Dense="true" />
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </MudExpansionPanel>
+    </MudExpansionPanels>
+}
 
 <!-- Phase progress cards -->
 <MudGrid Spacing="2" Class="mb-4">
@@ -35,8 +126,8 @@
                      Style="@(phase.Status == JobStatus.Running ? "border: 2px solid #5C6BC0" : "")">
                 <MudCardHeader>
                     <CardHeaderAvatar>
-                        <MudIcon Icon="@PhaseIcon(phase.Status)"
-                                 Color="@PhaseIconColor(phase.Status)" />
+                        <MudIcon Icon="@PhaseCardIcon(phase)"
+                                 Color="@PhaseCardColor(phase)" />
                     </CardHeaderAvatar>
                     <CardHeaderContent>
                         <MudText Typo="Typo.subtitle2">Phase @phase.PhaseNumber</MudText>
@@ -67,7 +158,8 @@
                     </MudCardContent>
                 }
 
-                @if ((phase.Status is JobStatus.Completed or JobStatus.Failed)
+                @if (((phase.Status is JobStatus.Completed or JobStatus.Failed)
+                      || (phase.Status == JobStatus.Pending && PhaseHasValidOutput(phase.PhaseNumber)))
                      && _job.Status is not JobStatus.Running and not JobStatus.Pending)
                 {
                     <MudCardActions>
@@ -77,6 +169,24 @@
                                    OnClick="() => RequestRerun(phase.PhaseNumber, phase.PhaseNumber)">
                             Re-run phase
                         </MudButton>
+                        @if (phase.PhaseNumber == 3)
+                        {
+                            <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Secondary"
+                                       StartIcon="@Icons.Material.Filled.SkipNext"
+                                       Disabled="_rerunning"
+                                       OnClick="() => ShowExpansionResume()">
+                                Resume from item…
+                            </MudButton>
+                        }
+                        @if (PhaseHasValidOutput(phase.PhaseNumber))
+                        {
+                            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success"
+                                       StartIcon="@Icons.Material.Filled.FastForward"
+                                       Disabled="_rerunning"
+                                       OnClick="() => RequestRerun(phase.PhaseNumber + 1, null)">
+                                Continue from next
+                            </MudButton>
+                        }
                         <MudButton Size="Size.Small" Variant="Variant.Text"
                                    StartIcon="@Icons.Material.Filled.FastForward"
                                    Disabled="_rerunning"
@@ -108,6 +218,34 @@
             </MudButton>
             <MudButton Variant="Variant.Text" Size="Size.Small"
                        OnClick="() => { _pendingRerunPhase = null; _rerunApiKey = string.Empty; _rerunning = false; }">
+                Cancel
+            </MudButton>
+        </MudStack>
+    </MudAlert>
+}
+
+@if (_expansionItems is not null)
+{
+    <MudAlert Severity="Severity.Info" Class="mb-4">
+        <MudText Typo="Typo.body2" Class="mb-2">
+            Phase 3 has @_expansionItems.Count completed item(s) on disk. Pick where to resume:
+        </MudText>
+        <MudSelect T="int" @bind-Value="_selectedStartItem" Label="Resume from item"
+                   Dense="true" Variant="Variant.Outlined">
+            <MudSelectItem T="int" Value="1">1 — Re-run all items (keep discovery)</MudSelectItem>
+            @foreach (var item in _expansionItems)
+            {
+                <MudSelectItem T="int" Value="@(item.Index + 1)">@(item.Index + 1) — after @item.Name</MudSelectItem>
+            }
+        </MudSelect>
+        <MudStack Row="true" Class="mt-2" Spacing="2">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.SkipNext"
+                       OnClick="() => RequestExpansionResume()">
+                Resume from item @_selectedStartItem
+            </MudButton>
+            <MudButton Variant="Variant.Text" Size="Size.Small"
+                       OnClick="() => { _expansionItems = null; _rerunning = false; }">
                 Cancel
             </MudButton>
         </MudStack>
@@ -147,7 +285,11 @@
         _loadedJobId = JobId;
         _job = JobStore.GetDecompose(JobId);
         if (_job is not null)
+        {
             _job.OnChanged += OnJobChanged;
+            InitPhaseConfigs();
+            RefreshDiskOutputCache();
+        }
 
         if (_job?.Status is JobStatus.Running or JobStatus.Pending)
             _ = TickAsync();
@@ -161,6 +303,9 @@
 
     private void OnJobChanged()
     {
+        if (_job?.Status is JobStatus.Completed or JobStatus.Failed)
+            RefreshDiskOutputCache();
+
         if (_job?.Status == JobStatus.Running && _ticker is null)
             _ = TickAsync();
         InvokeAsync(StateHasChanged);
@@ -185,23 +330,91 @@
     }
 
     private bool _rerunning;
+    private List<PhaseConfig> _phaseConfigs = new();
     private int? _pendingRerunPhase;
     private int? _pendingRerunEndPhase;
     private string _rerunApiKey = string.Empty;
+
+    // Expansion resume state
+    private List<ExpansionFileInfo>? _expansionItems;
+    private int _selectedStartItem = 1;
+
+    // Edit mode state
+    private bool _editing;
+    private bool _saving;
+    private string _editProjectName = string.Empty;
+    private string _editSource = string.Empty;
+    private string _editOutputRoot = string.Empty;
+    private string _editCloneDirectory = string.Empty;
+
+    // Cached per-phase on-disk output flags — avoids repeated filesystem scans during render.
+    private readonly HashSet<int> _diskOutputPhases = new();
+
+    private record ExpansionFileInfo(int Index, string Name, string Path);
+
+    /// <summary>Mutable row backing the per-phase configuration table.</summary>
+    private sealed class PhaseConfig
+    {
+        public int Number { get; init; }
+        public string Title { get; init; } = string.Empty;
+        public OrchestratorType? Orchestrator { get; set; }
+        public bool AppendResults { get; set; }
+    }
+
+    /// <summary>
+    /// Populates the per-phase config list from the template phases,
+    /// restoring any overrides that were saved on the current job.
+    /// </summary>
+    private void InitPhaseConfigs()
+    {
+        Dictionary<int, PhaseOverride>? existing = _job!.Options.PhaseOverrides;
+        _phaseConfigs = PhaseTemplates.Phases.Select(p =>
+        {
+            PhaseOverride? ov = null;
+            existing?.TryGetValue(p.Number, out ov);
+            return new PhaseConfig
+            {
+                Number = p.Number,
+                Title = p.Title,
+                Orchestrator = ov?.Orchestrator,
+                AppendResults = ov?.UseAppendResults == true
+            };
+        }).ToList();
+    }
 
     private void RequestRerun(int phase, int? endPhase)
     {
         if (_job is null || _rerunning) return;
         _rerunning = true;
-        // OpenAI key is never persisted — ask for it again if missing
-        if (_job.Options.Orchestrator == OrchestratorType.OpenAI &&
-            string.IsNullOrEmpty(_job.Options.OpenAiApiKey))
+
+        // Check whether any phase in the re-run range will use OpenAI and needs a key.
+        bool needsOpenAiKey = NeedsOpenAiKey(phase, endPhase);
+        if (needsOpenAiKey &&
+            string.IsNullOrEmpty(_job.Options.OpenAiApiKey) &&
+            string.IsNullOrEmpty(LlmSettings.OpenAiApiKey))
         {
             _pendingRerunPhase = phase;
             _pendingRerunEndPhase = endPhase;
             return;
         }
         _ = RerunAsync(phase, endPhase, null);
+    }
+
+    /// <summary>
+    /// Returns true when any phase in [start..end] resolves to OpenAI, meaning
+    /// we need an API key before we can run.
+    /// </summary>
+    private bool NeedsOpenAiKey(int startPhase, int? endPhase)
+    {
+        OrchestratorType globalOrch = _job!.Options.Orchestrator;
+        foreach (PhaseConfig pc in _phaseConfigs)
+        {
+            if (pc.Number < startPhase) continue;
+            if (endPhase.HasValue && pc.Number > endPhase.Value) continue;
+            OrchestratorType effective = pc.Orchestrator ?? globalOrch;
+            if (effective == OrchestratorType.OpenAI) return true;
+        }
+        return false;
     }
 
     private async Task ConfirmRerunAsync()
@@ -216,21 +429,39 @@
         await RerunAsync(phase, endPhase, key);
     }
 
-    private async Task RerunAsync(int phase, int? endPhase, string? apiKeyOverride)
+    private DecomposeOptions BuildRerunOptions(
+        int startPhase, int? endPhase, int? startItem = null, string? apiKeyOverride = null)
     {
-        if (_job is null) { _rerunning = false; return; }
-        var o = _job.Options;
-        var newOptions = new DecomposeOptions
+        var o = _job!.Options;
+
+        // Build per-phase overrides from the UI config table.
+        Dictionary<int, PhaseOverride> overrides = new();
+        foreach (PhaseConfig pc in _phaseConfigs)
+        {
+            PhaseOverride po = new()
+            {
+                Orchestrator = pc.Orchestrator,
+                UseAppendResults = pc.AppendResults ? true : null
+            };
+            if (!po.IsEmpty)
+                overrides[pc.Number] = po;
+        }
+
+        // If any per-phase override changes the engine, pull model/key from global settings.
+        bool anyEngineOverride = _phaseConfigs.Any(pc => pc.Orchestrator is not null);
+
+        return new DecomposeOptions
         {
             Source                 = o.Source,
             ProjectName            = o.ProjectName,
             Orchestrator           = o.Orchestrator,
-            ThickModel             = o.ThickModel,
-            RegularModel           = o.RegularModel,
-            ThinModel              = o.ThinModel,
-            OpenAiApiKey           = apiKeyOverride ?? o.OpenAiApiKey,
-            OpenAiEndpoint         = o.OpenAiEndpoint,
-            StartPhase             = phase,
+            ThickModel             = anyEngineOverride ? LlmSettings.ThickModel ?? o.ThickModel : o.ThickModel,
+            RegularModel           = anyEngineOverride ? LlmSettings.RegularModel ?? o.RegularModel : o.RegularModel,
+            ThinModel              = anyEngineOverride ? LlmSettings.ThinModel ?? o.ThinModel : o.ThinModel,
+            OpenAiApiKey           = apiKeyOverride ?? LlmSettings.OpenAiApiKey ?? o.OpenAiApiKey,
+            OpenAiEndpoint         = anyEngineOverride ? LlmSettings.OpenAiEndpoint ?? o.OpenAiEndpoint : o.OpenAiEndpoint,
+            StartPhase             = startPhase,
+            StartItem              = startItem,
             EndPhase               = endPhase,
             OutputRoot             = o.OutputRoot,
             MaxOutputTokens        = o.MaxOutputTokens,
@@ -240,12 +471,134 @@
             MaxTurns               = o.MaxTurns,
             TimeoutMinutes         = o.TimeoutMinutes,
             KeepClone              = o.KeepClone,
-            CloneDirectory         = o.CloneDirectory
+            CloneDirectory         = o.CloneDirectory,
+            Hints                  = o.Hints,
+            PhaseOverrides         = overrides.Count > 0 ? overrides : null,
         };
-        var newJob = new DecomposeJob { Options = newOptions };
+    }
+
+    private async Task RerunAsync(int phase, int? endPhase, string? apiKeyOverride)
+    {
+        if (_job is null) { _rerunning = false; return; }
+        var newJob = new DecomposeJob { Options = BuildRerunOptions(phase, endPhase, apiKeyOverride: apiKeyOverride) };
         JobStore.Add(newJob);
         await JobQueue.EnqueueAsync(newJob);
         Nav.NavigateTo($"/jobs/{newJob.Id}");
+    }
+
+    private void ShowExpansionResume()
+    {
+        if (_job is null) return;
+        _rerunning = true;
+
+        string dir = System.IO.Path.Combine(_job.Options.OutputRoot, "Output", "Decomposition", _job.Options.ProjectName);
+        List<ExpansionFileInfo> items = new();
+
+        if (Directory.Exists(dir))
+        {
+            // Find 03-XX-*.md files (skip 03-00-discovery.json) that are over 1KB
+            foreach (string file in Directory.GetFiles(dir, "03-*.md").OrderBy(f => f))
+            {
+                string name = System.IO.Path.GetFileName(file);
+                if (name.Length < 6) continue;
+
+                // Parse the index from "03-XX-slug.md"
+                if (int.TryParse(name.AsSpan(3, 2), out int idx) && idx > 0)
+                {
+                    FileInfo fi = new FileInfo(file);
+                    if (fi.Length >= 1024)
+                    {
+                        // Derive a readable name from the slug portion
+                        string slug = System.IO.Path.GetFileNameWithoutExtension(name)[6..];
+                        items.Add(new ExpansionFileInfo(idx, slug.Replace('-', ' '), file));
+                    }
+                }
+            }
+        }
+
+        if (items.Count == 0)
+        {
+            // No completed items found — fall back to normal re-run
+            _rerunning = false;
+            RequestRerun(3, 3);
+            return;
+        }
+
+        _expansionItems = items;
+        _selectedStartItem = items[^1].Index + 1; // default: resume after the last completed item
+    }
+
+    private void RequestExpansionResume()
+    {
+        if (_job is null) return;
+        _expansionItems = null;
+        // Delegate to the standard re-run with StartItem set
+        _ = RerunWithStartItemAsync(3, 3, _selectedStartItem);
+    }
+
+    private async Task RerunWithStartItemAsync(int phase, int? endPhase, int startItem)
+    {
+        if (_job is null) { _rerunning = false; return; }
+        var newJob = new DecomposeJob { Options = BuildRerunOptions(phase, endPhase, startItem: startItem) };
+        JobStore.Add(newJob);
+        await JobQueue.EnqueueAsync(newJob);
+        Nav.NavigateTo($"/jobs/{newJob.Id}");
+    }
+
+    private void AbortJob()
+    {
+        if (_job is null) return;
+
+        if (_job.Status is JobStatus.Running)
+        {
+            _job.Abort();
+            _job.AppendLog("Abort requested by user.");
+        }
+        else
+        {
+            // Pending or stuck from a previous run — force to Failed immediately.
+            _job.ForceFail("Aborted by user.");
+        }
+    }
+
+    private void StartEdit()
+    {
+        if (_job is null) return;
+        _editProjectName = _job.Options.ProjectName;
+        _editSource = _job.Options.Source;
+        _editOutputRoot = _job.Options.OutputRoot;
+        _editCloneDirectory = _job.Options.CloneDirectory ?? string.Empty;
+        _editing = true;
+    }
+
+    private void CancelEdit()
+    {
+        _editing = false;
+    }
+
+    private async Task SaveEditAsync()
+    {
+        if (_job is null) return;
+        _saving = true;
+
+        string oldProjectName = _job.Options.ProjectName;
+
+        _job.Options.ProjectName = _editProjectName.Trim();
+        _job.Options.Source = _editSource.Trim();
+        _job.Options.OutputRoot = _editOutputRoot.Trim();
+        _job.Options.CloneDirectory = string.IsNullOrWhiteSpace(_editCloneDirectory)
+            ? null
+            : _editCloneDirectory.Trim();
+
+        await Persistence.SaveAsync(_job);
+
+        // If the project name changed, clean up the old job.json at the previous path.
+        if (!string.Equals(oldProjectName, _job.Options.ProjectName, StringComparison.Ordinal))
+            Persistence.DeleteJobFile(_job.Options.OutputRoot, oldProjectName);
+
+        _editing = false;
+        _saving = false;
+        _job.NotifyChanged();
     }
 
     private static Color StatusColor(JobStatus s) => s switch
@@ -271,6 +624,63 @@
         JobStatus.Running => Color.Primary,
         _ => Color.Default
     };
+
+    /// <summary>
+    /// Returns the appropriate icon for a phase card, accounting for on-disk
+    /// output from prior runs when this job didn't execute the phase.
+    /// </summary>
+    private string PhaseCardIcon(PhaseProgress phase)
+    {
+        if (phase.Status != JobStatus.Pending)
+            return PhaseIcon(phase.Status);
+
+        return PhaseHasValidOutput(phase.PhaseNumber)
+            ? Icons.Material.Outlined.CheckCircle
+            : Icons.Material.Filled.RadioButtonUnchecked;
+    }
+
+    /// <summary>
+    /// Returns the icon color for a phase card, using a muted tone for
+    /// phases that have on-disk output but were not part of this job.
+    /// </summary>
+    private Color PhaseCardColor(PhaseProgress phase)
+    {
+        if (phase.Status != JobStatus.Pending)
+            return PhaseIconColor(phase.Status);
+
+        return PhaseHasValidOutput(phase.PhaseNumber)
+            ? Color.Tertiary
+            : Color.Default;
+    }
+
+    /// <summary>
+    /// Returns true if the phase has at least one output file on disk over 1KB,
+    /// indicating it completed with real content and can safely be skipped.
+    /// Uses a cached set populated at load time to avoid repeated filesystem scans.
+    /// </summary>
+    private bool PhaseHasValidOutput(int phaseNumber) => _diskOutputPhases.Contains(phaseNumber);
+
+    /// <summary>
+    /// Scans the output directory once and caches which phases have valid files on disk.
+    /// Called when the job loads and after re-runs complete.
+    /// </summary>
+    private void RefreshDiskOutputCache()
+    {
+        _diskOutputPhases.Clear();
+        if (_job is null) return;
+
+        string dir = System.IO.Path.Combine(_job.Options.OutputRoot, "Output", "Decomposition", _job.Options.ProjectName);
+        if (!Directory.Exists(dir)) return;
+
+        for (int phase = 0; phase <= 7; phase++)
+        {
+            string prefix = $"{phase:D2}-";
+            bool hasOutput = Directory.GetFiles(dir, $"{prefix}*.md")
+                .Any(f => new FileInfo(f).Length >= 1024);
+            if (hasOutput)
+                _diskOutputPhases.Add(phase);
+        }
+    }
 
     public void Dispose()
     {

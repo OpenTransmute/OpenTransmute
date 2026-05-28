@@ -1,0 +1,415 @@
+@namespace OpenTransmute.Components.Pages
+@using Microsoft.EntityFrameworkCore
+@using System.Text.Json
+@using OpenTransmute.Data
+@using OpenTransmute.Models
+
+<MudDialog>
+    <TitleContent>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.Build" Color="Color.Success" />
+            <MudText Typo="Typo.h6" Style="font-weight:600">Apply Fixes — @ProductName</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        @if (_scanning)
+        {
+            <MudStack AlignItems="AlignItems.Center" Spacing="2" Class="pa-6">
+                <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">Scanning verify reports…</MudText>
+            </MudStack>
+        }
+        else if (_fixItems.Count == 0)
+        {
+            <MudStack AlignItems="AlignItems.Center" Spacing="2" Class="pa-6">
+                <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Large" Color="Color.Success" Style="opacity:0.4" />
+                <MudText Typo="Typo.body1" Class="mud-text-secondary">No pending fixes found.</MudText>
+            </MudStack>
+        }
+        else
+        {
+            @* ── Status dashboard ── *@
+            <MudPaper Elevation="0" Class="pa-3 mb-4" Style="background:var(--mud-palette-background-grey);border-radius:8px">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceAround">
+                    <MudStack AlignItems="AlignItems.Center" Spacing="0">
+                        <MudText Typo="Typo.h4" Color="Color.Primary" Style="font-weight:700">@_totalCount</MudText>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">Total</MudText>
+                    </MudStack>
+                    <MudStack AlignItems="AlignItems.Center" Spacing="0">
+                        <MudText Typo="Typo.h4" Color="Color.Success" Style="font-weight:700">@_appliedCount</MudText>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">Fixed</MudText>
+                    </MudStack>
+                    <MudStack AlignItems="AlignItems.Center" Spacing="0">
+                        <MudText Typo="Typo.h4" Style="font-weight:700;color:var(--mud-palette-text-primary)">@_remainingCount</MudText>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">Remaining</MudText>
+                    </MudStack>
+                    @if (_skippedCount > 0)
+                    {
+                        <MudStack AlignItems="AlignItems.Center" Spacing="0">
+                            <MudText Typo="Typo.h4" Color="Color.Warning" Style="font-weight:700">@_skippedCount</MudText>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">Skipped</MudText>
+                        </MudStack>
+                    }
+                </MudStack>
+            </MudPaper>
+
+            @* ── Pending fixes (disappear as applied) ── *@
+            @foreach (var group in PendingItems.GroupBy(f => f.ProjectName).OrderBy(g => g.Key))
+            {
+                <MudText Typo="Typo.subtitle2" Class="mt-2 mb-1" Style="font-weight:600">
+                    <MudIcon Icon="@Icons.Material.Filled.AccountTree" Size="Size.Small" Class="mr-1"
+                             Style="vertical-align:text-bottom" />
+                    @group.Key
+                </MudText>
+
+                @foreach (var docGroup in group.GroupBy(f => f.DocumentName).OrderBy(g => g.Key))
+                {
+                    <MudText Typo="Typo.caption" Class="ml-4 mud-text-secondary">@docGroup.Key</MudText>
+
+                    @foreach (FixItem fix in docGroup)
+                    {
+                        <MudStack Row="true" AlignItems="AlignItems.Start" Spacing="1" Class="ml-6 mb-1"
+                                  Style="@(_applying && fix == _currentFix ? "background:rgba(21,101,192,0.06);border-radius:4px;padding:4px" : "padding:4px")">
+                            @if (fix.Skipped)
+                            {
+                                <MudTooltip Text="@fix.SkipReason">
+                                    <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Warning" Size="Size.Small"
+                                             Style="margin-top:2px" />
+                                </MudTooltip>
+                            }
+                            else if (_applying && fix == _currentFix)
+                            {
+                                <MudProgressCircular Indeterminate="true" Size="Size.Small" Color="Color.Primary"
+                                                     Style="width:20px;height:20px;margin-top:2px" />
+                            }
+                            else
+                            {
+                                <MudIcon Icon="@Icons.Material.Filled.RadioButtonUnchecked" Color="Color.Default" Size="Size.Small"
+                                         Style="margin-top:2px;opacity:0.3" />
+                            }
+
+                            <MudStack Spacing="0" Style="min-width:0">
+                                <MudText Typo="Typo.body2" Style="font-weight:500">
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                             Color="@(fix.Severity == "FABRICATED" ? Color.Error : fix.Severity == "MAJOR" ? Color.Warning : Color.Info)"
+                                             Style="margin-right:4px;vertical-align:text-bottom">
+                                        @fix.Severity
+                                    </MudChip>
+                                    @fix.Claim
+                                </MudText>
+                                @if (!string.IsNullOrWhiteSpace(fix.Finding))
+                                {
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary" Style="white-space:pre-wrap">
+                                        @fix.Finding
+                                    </MudText>
+                                }
+                            </MudStack>
+                        </MudStack>
+                    }
+                }
+            }
+
+            @* ── Show completed section if any fixed ── *@
+            @if (_appliedCount > 0 && PendingItems.Any())
+            {
+                <MudDivider Class="my-3" />
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Size="Size.Small"
+                             Style="vertical-align:text-bottom;margin-right:4px" />
+                    @_appliedCount fix@(_appliedCount != 1 ? "es" : "") applied and removed from list
+                </MudText>
+            }
+
+            @* ── All done message ── *@
+            @if (!PendingItems.Any() && _appliedCount > 0)
+            {
+                <MudStack AlignItems="AlignItems.Center" Spacing="2" Class="pa-6">
+                    <MudIcon Icon="@Icons.Material.Filled.Celebration" Size="Size.Large" Color="Color.Success" />
+                    <MudText Typo="Typo.h6" Color="Color.Success" Style="font-weight:600">All fixes applied!</MudText>
+                </MudStack>
+            }
+        }
+    </DialogContent>
+    <DialogActions>
+        @if (!_scanning && _fixItems.Count > 0)
+        {
+            @* ── Progress bar ── *@
+            <MudProgressLinear Value="@ProgressPercent" Color="Color.Success"
+                               Style="flex:1;margin-right:16px;min-width:100px"
+                               Rounded="true" Size="Size.Medium">
+                <MudText Typo="Typo.caption" Style="font-weight:600">
+                    @($"{_appliedCount}/{_totalCount}")
+                </MudText>
+            </MudProgressLinear>
+        }
+        @if (!_scanning && _fixItems.Count > 0 && !_applying && PendingItems.Any(f => !f.Skipped))
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.PlayArrow"
+                       OnClick="ApplyAllAsync">
+                Apply All Fixes
+            </MudButton>
+        }
+        <MudButton OnClick="Close" Variant="@(_applying ? Variant.Text : Variant.Filled)">
+            @(_applying ? "Close (runs in background)" : "Close")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    #region Members
+
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = null!;
+
+    /// <summary>Display name for the product being fixed.</summary>
+    [Parameter] public string ProductName { get; set; } = string.Empty;
+
+    /// <summary>Projects belonging to the product.</summary>
+    [Parameter] public List<DecomposedProject> Projects { get; set; } = new();
+
+    /// <summary>Factory for creating DB contexts.</summary>
+    [Parameter] public IDbContextFactory<AppDbContext> DbFactory { get; set; } = null!;
+
+    private List<FixItem> _fixItems = new();
+    private bool _scanning = true;
+    private bool _applying;
+    private FixItem? _currentFix;
+
+    private int _totalCount => _fixItems.Count;
+    private int _appliedCount => _fixItems.Count(f => f.Applied);
+    private int _skippedCount => _fixItems.Count(f => f.Skipped);
+    private int _remainingCount => _totalCount - _appliedCount - _skippedCount;
+    private double ProgressPercent => _totalCount > 0 ? (double)_appliedCount / _totalCount * 100.0 : 0;
+
+    /// <summary>Items not yet applied — the live shrinking list.</summary>
+    private IEnumerable<FixItem> PendingItems => _fixItems.Where(f => !f.Applied);
+
+    private static readonly JsonSerializerOptions _deserializeOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
+    private static readonly JsonSerializerOptions _serializeOptions = new()
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+    };
+
+    #endregion
+
+    #region Constructor
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ScanForFixesAsync();
+        _scanning = false;
+    }
+
+    #endregion
+
+    #region Methods
+
+    /// <summary>
+    /// Scans all verify JSON files across every project in the product,
+    /// collecting fixable claims into a flat list for display.
+    /// </summary>
+    private async Task ScanForFixesAsync()
+    {
+        foreach (DecomposedProject project in Projects)
+        {
+            string verifyDir = Path.Combine(project.OutputPath, "..", "..", "..", "Output", "Verification", project.Name);
+            if (!Directory.Exists(verifyDir)) continue;
+
+            string[] verifyFiles = Directory.GetFiles(verifyDir, "verify-*.json");
+
+            foreach (string verifyPath in verifyFiles)
+            {
+                try
+                {
+                    string json = await File.ReadAllTextAsync(verifyPath);
+                    VerifyReport? report = JsonSerializer.Deserialize<VerifyReport>(json, _deserializeOptions);
+                    if (report?.Claims is null || report.Claims.Count == 0) continue;
+
+                    string verifyFileName = Path.GetFileNameWithoutExtension(verifyPath);
+                    string docName = verifyFileName.StartsWith("verify-", StringComparison.OrdinalIgnoreCase)
+                        ? verifyFileName[7..] + ".md"
+                        : verifyFileName + ".md";
+
+                    foreach (VerifyClaim claim in report.Claims)
+                    {
+                        if (claim.Status is not ("FAIL" or "FABRICATED")) continue;
+                        if (claim.Fix is null || string.IsNullOrWhiteSpace(claim.Fix.Find) || string.IsNullOrWhiteSpace(claim.Fix.Replace)) continue;
+                        if (claim.FixedAt is not null) continue;
+
+                        _fixItems.Add(new FixItem
+                        {
+                            ProjectId = project.Id,
+                            ProjectName = project.Name,
+                            OutputPath = project.OutputPath,
+                            DocumentName = docName,
+                            VerifyFilePath = verifyPath,
+                            ClaimId = claim.Id,
+                            Claim = claim.Claim,
+                            Severity = claim.Severity ?? "FAIL",
+                            Finding = claim.Finding ?? string.Empty,
+                            Find = claim.Fix.Find,
+                            Replace = claim.Fix.Replace
+                        });
+                    }
+                }
+                catch
+                {
+                    // Skip unreadable files
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Applies all pending fixes one by one, updating the UI after each.
+    /// Groups by document so each file is read/written once per batch.
+    /// </summary>
+    private async Task ApplyAllAsync()
+    {
+        _applying = true;
+        StateHasChanged();
+
+        try
+        {
+            // Group by project + document to minimize file I/O
+            var docGroups = _fixItems
+                .Where(f => !f.Applied && !f.Skipped)
+                .GroupBy(f => (f.ProjectId, f.DocumentName));
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            foreach (var docGroup in docGroups)
+            {
+                Guid projectId = docGroup.Key.ProjectId;
+                string docName = docGroup.Key.DocumentName;
+                List<FixItem> fixes = docGroup.ToList();
+
+                // Load phase content from DB
+                DecomposePhaseOutput? phase = await db.PhaseOutputs
+                    .FirstOrDefaultAsync(p => p.ProjectId == projectId && p.Filename == docName);
+
+                if (phase is null)
+                {
+                    foreach (FixItem fix in fixes)
+                    {
+                        fix.Skipped = true;
+                        fix.SkipReason = "Phase output not found in database";
+                    }
+                    StateHasChanged();
+                    continue;
+                }
+
+                string content = phase.Content;
+
+                foreach (FixItem fix in fixes)
+                {
+                    _currentFix = fix;
+                    StateHasChanged();
+                    await Task.Delay(50); // Let the UI render the spinner
+
+                    if (!content.Contains(fix.Find, StringComparison.Ordinal))
+                    {
+                        fix.Skipped = true;
+                        fix.SkipReason = "Find text not found in document — may already be fixed or content changed";
+                        StateHasChanged();
+                        continue;
+                    }
+
+                    content = content.Replace(fix.Find, fix.Replace, StringComparison.Ordinal);
+                    fix.Applied = true;
+                    StateHasChanged();
+                }
+
+                // Persist if anything changed
+                if (fixes.Any(f => f.Applied))
+                {
+                    phase.Content = content;
+
+                    // Write to disk
+                    string outputPath = fixes.First().OutputPath;
+                    string diskPath = Path.Combine(outputPath, docName);
+                    if (File.Exists(diskPath))
+                        await File.WriteAllTextAsync(diskPath, content);
+                }
+            }
+
+            await db.SaveChangesAsync();
+
+            // Stamp FixedAt on verify JSON files
+            await StampVerifyFilesAsync();
+        }
+        finally
+        {
+            _currentFix = null;
+            _applying = false;
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>
+    /// Re-reads each verify JSON file that had fixes applied, stamps FixedAt on the
+    /// matching claims, and writes the file back.
+    /// </summary>
+    private async Task StampVerifyFilesAsync()
+    {
+        var verifyGroups = _fixItems
+            .Where(f => f.Applied)
+            .GroupBy(f => f.VerifyFilePath);
+
+        foreach (var group in verifyGroups)
+        {
+            try
+            {
+                string json = await File.ReadAllTextAsync(group.Key);
+                VerifyReport? report = JsonSerializer.Deserialize<VerifyReport>(json, _deserializeOptions);
+                if (report?.Claims is null) continue;
+
+                HashSet<int> appliedClaimIds = group.Select(f => f.ClaimId).ToHashSet();
+                DateTime now = DateTime.UtcNow;
+
+                foreach (VerifyClaim claim in report.Claims)
+                {
+                    if (appliedClaimIds.Contains(claim.Id))
+                        claim.FixedAt = now;
+                }
+
+                string updatedJson = JsonSerializer.Serialize(report, _serializeOptions);
+                await File.WriteAllTextAsync(group.Key, updatedJson);
+            }
+            catch
+            {
+                // Non-fatal — fixes were applied even if the stamp fails
+            }
+        }
+    }
+
+    private void Close() => MudDialog.Close();
+
+    #endregion
+}
+
+@code {
+    /// <summary>Tracks a single fixable claim across scanning, display, and application.</summary>
+    private class FixItem
+    {
+        public Guid ProjectId { get; set; }
+        public string ProjectName { get; set; } = string.Empty;
+        public string OutputPath { get; set; } = string.Empty;
+        public string DocumentName { get; set; } = string.Empty;
+        public string VerifyFilePath { get; set; } = string.Empty;
+        public int ClaimId { get; set; }
+        public string Claim { get; set; } = string.Empty;
+        public string Severity { get; set; } = string.Empty;
+        public string Finding { get; set; } = string.Empty;
+        public string Find { get; set; } = string.Empty;
+        public string Replace { get; set; } = string.Empty;
+        public bool Applied { get; set; }
+        public bool Skipped { get; set; }
+        public string SkipReason { get; set; } = string.Empty;
+    }
+}

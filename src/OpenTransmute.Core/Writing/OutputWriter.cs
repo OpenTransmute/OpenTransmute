@@ -9,6 +9,31 @@ public sealed class OutputWriter
     #region Methods
 
     /// <summary>
+    /// Strips any lines before the first Markdown heading (<c># </c>) from the content.
+    /// Catches model "thinking aloud" preamble that leaks into output (e.g.
+    /// "Now let me look at..." or "I now have enough information...").
+    /// Returns the content unchanged if no heading is found or the heading is already first.
+    /// </summary>
+    public static string StripPreamble(string content)
+    {
+        int idx = 0;
+        while (idx < content.Length)
+        {
+            // Check if this line starts with '# ' (H1 heading)
+            if (content[idx] == '#' && idx + 1 < content.Length && content[idx + 1] == ' ')
+                return content[idx..];
+
+            // Skip to next line
+            int nl = content.IndexOf('\n', idx);
+            if (nl < 0) break;
+            idx = nl + 1;
+        }
+
+        // No heading found — return as-is rather than discarding everything
+        return content;
+    }
+
+    /// <summary>
     /// Writes <paramref name="content"/> to <c>Output/Decomposition/&lt;projectName&gt;/&lt;filename&gt;</c>
     /// under <paramref name="outputRoot"/> using an atomic tmp + rename.
     /// </summary>
@@ -27,6 +52,8 @@ public sealed class OutputWriter
 
         string finalPath = Path.Combine(dir, filename);
         string tmpPath   = finalPath + ".tmp";
+
+        content = StripPreamble(content);
 
         if (string.IsNullOrWhiteSpace(content))
             throw new InvalidOperationException(
@@ -53,6 +80,32 @@ public sealed class OutputWriter
                      .Concat(Directory.GetFiles(dir, $"{prefix}*.tmp")))
         {
             File.Delete(file);
+        }
+    }
+
+    /// <summary>
+    /// Deletes expansion output files for <paramref name="phaseNumber"/> at or above
+    /// <paramref name="startItem"/> (1-based). Files below that index are preserved.
+    /// Also preserves the discovery file (e.g. 03-00-discovery.json).
+    /// </summary>
+    public void DeletePhaseFilesFrom(string outputRoot, string projectName, int phaseNumber, int startItem)
+    {
+        string dir = Path.Combine(outputRoot, "Output", "Decomposition", projectName);
+        if (!Directory.Exists(dir)) return;
+
+        string prefix = $"{phaseNumber:D2}-";
+        foreach (string file in Directory.GetFiles(dir, $"{prefix}*.md")
+                     .Concat(Directory.GetFiles(dir, $"{prefix}*.tmp")))
+        {
+            string name = Path.GetFileName(file);
+            // Preserve discovery file (03-00-discovery.json) — it starts with the phase prefix
+            // but has index 00 which is below any valid startItem (1-based).
+            if (name.Length >= prefix.Length + 2 &&
+                int.TryParse(name.AsSpan(prefix.Length, 2), out int fileIndex) &&
+                fileIndex >= startItem)
+            {
+                File.Delete(file);
+            }
         }
     }
 

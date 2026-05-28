@@ -45,22 +45,42 @@ public sealed class ClaudeSubprocessExecutor(ILogger<ClaudeSubprocessExecutor> l
         StringBuilder errorsBuilder = new StringBuilder();
         StringBuilder outputBuilder = new StringBuilder();
 
+        // Stream log — mirrors CopilotSubprocessExecutor's diagnostic logging.
+        using StreamDiagnosticLog streamLog = StreamDiagnosticLog.Create(ctx, "claude", logger);
+        streamLog.WriteHeader(ctx,
+            ("MaxTurns", ctx.MaxTurns.ToString()),
+            ("Args", string.Join(" ", psi.ArgumentList)));
+
         process.ErrorDataReceived += (_, e) =>
         {
-            if (e.Data is not null) errorsBuilder.AppendLine(e.Data);
+            if (e.Data is not null)
+            {
+                errorsBuilder.AppendLine(e.Data);
+                streamLog.WriteLine($"  [STDERR] {e.Data}");
+            }
         };
 
         process.Start();
         process.BeginErrorReadLine();
 
         // Deliver prompt via stdin — more robust than a CLI argument for large prompts.
-        await process.StandardInput.WriteAsync(ctx.UserPrompt);
+        // When OutputFilePath is set, append a direct-write instruction so the model
+        // uses its file-write tool instead of producing stdout text.
+        string prompt = ctx.UserPrompt;
+        if (ctx.OutputFilePath is not null)
+            prompt += $"\n\nWrite your complete output to this file using your Write tool: {ctx.OutputFilePath}\n" +
+                      "Create the directory if it does not exist. Do NOT output the content to stdout — write it to the file only.";
+
+        streamLog.WriteLine($"=== PROMPT ({prompt.Length:N0} chars) ===\n{prompt}\n");
+
+        await process.StandardInput.WriteAsync(prompt);
         process.StandardInput.Close();
 
         while (await process.StandardOutput.ReadLineAsync(ct) is string line)
         {
             outputBuilder.AppendLine(line);
             yield return new LlmLine(line);
+            streamLog.WriteLine(line);
         }
 
         await process.WaitForExitAsync(ct);
@@ -69,17 +89,21 @@ public sealed class ClaudeSubprocessExecutor(ILogger<ClaudeSubprocessExecutor> l
         {
             string err = errorsBuilder.ToString().Trim();
             logger.LogError("claude exited {Code}: {Err}", process.ExitCode, err);
+            streamLog.WriteLine($"\n\n=== FAILED (exit code {process.ExitCode}) ===\n{err}");
 
             // Throw so JobOrchestrator.RunLlmCallWithRetryAsync can apply backoff retry,
             // matching the behaviour of OpenAiChatExecutor on rate-limit responses.
-            if (err.Contains("rate limit", StringComparison.OrdinalIgnoreCase) || err.Contains("429"))
+            if (LlmRateLimitException.IsRateLimitSignal(err))
                 throw new LlmRateLimitException();
 
             yield return new LlmFailed($"claude exited {process.ExitCode}: {(err.Length > 0 ? err : "no stderr")}");
             yield break;
         }
 
-        yield return new LlmCompleted(outputBuilder.ToString().TrimEnd(), TokenUsage.Zero);
+        string output = outputBuilder.ToString().TrimEnd();
+        streamLog.WriteLine($"\n\n=== COMPLETED ({output.Length:N0} chars) ===");
+
+        yield return new LlmCompleted(output, TokenUsage.Zero);
     }
 
     #endregion
@@ -101,9 +125,17 @@ public sealed class ClaudeSubprocessExecutor(ILogger<ClaudeSubprocessExecutor> l
             StandardErrorEncoding  = Encoding.UTF8
         };
 
-        // Append stdout-only instruction unless the model is writing files directly.
-        string systemPrompt = (ctx.SystemPrompt ?? string.Empty) +
-            (ctx.EnableFileTools ? string.Empty : StdoutInstruction);
+        // Append stdout-only instruction unless the model has a direct file-write target
+        // or is in Implement mode (EnableFileTools without read-only).
+        bool directWrite = ctx.OutputFilePath is not null;
+        bool isImplementMode = ctx.EnableFileTools && !ctx.EnableReadOnlyFileTools;
+        string outputSuffix = directWrite || isImplementMode
+            ? string.Empty
+            : ctx.JsonOutputMode
+                ? "\n\nYour ENTIRE response must be a single JSON object. " +
+                  "Start with { and end with }. No markdown, no code fences, no preamble, no explanation."
+                : StdoutInstruction;
+        string systemPrompt = (ctx.SystemPrompt ?? string.Empty) + outputSuffix;
 
         if (!string.IsNullOrEmpty(systemPrompt))
         {
@@ -126,12 +158,13 @@ public sealed class ClaudeSubprocessExecutor(ILogger<ClaudeSubprocessExecutor> l
         psi.ArgumentList.Add("text");
 
         // Whitelist the tools the model may use.
-        // Decompose: read-only file access so the model can browse the source repository.
+        // OutputFilePath: read + write so the model can browse source and write the output file.
         // Implement: file manipulation (read + write) to produce code output.
+        // Decompose without direct write: read-only file access.
         // Compose and other stdout-only phases: no tools.
         // Bash and network tools are never permitted regardless of mode.
         psi.ArgumentList.Add("--allowedTools");
-        psi.ArgumentList.Add(ctx.EnableFileTools
+        psi.ArgumentList.Add(ctx.EnableFileTools || ctx.OutputFilePath is not null
             ? "Read,Write,Edit,MultiEdit,Glob,Grep,LS"
             : ctx.EnableReadOnlyFileTools
                 ? "Read,Glob,Grep,LS"

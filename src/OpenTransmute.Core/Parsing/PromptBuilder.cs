@@ -117,6 +117,90 @@ public sealed class PromptBuilder(PromptTemplates templates)
         return AppendHints(prompt, context.Hints);
     }
 
+    /// <summary>
+    /// Builds the per-chunk prompt for a synthesis phase.
+    /// Reads the source spec file and injects its full content directly into the prompt,
+    /// avoiding file-tool round-trips that cause the Copilot agent model to stall.
+    /// Substitutes common placeholders and <c>&lt;ListItem.*&gt;</c> fields from the discovery JSON.
+    /// </summary>
+    public string BuildSynthesisChunkPrompt(
+        PhaseSpec phase,
+        RunContext context,
+        JsonElement item,
+        string sourceSpecFilePath)
+    {
+        if (phase.ChunkPrompt is null)
+            throw new InvalidOperationException($"Phase {phase.Number} has no ChunkPrompt.");
+
+        string filename = Path.GetFileName(sourceSpecFilePath);
+
+        string prompt = SubstituteCommon(phase.ChunkPrompt, context);
+        prompt = SubstituteListItem(prompt, item);
+        prompt = prompt.Replace("<SynthesisSourceFile>", filename, StringComparison.OrdinalIgnoreCase);
+
+        // Read the spec file and prepend its content so the model has everything in-prompt.
+        string content;
+        try { content = File.ReadAllText(sourceSpecFilePath, System.Text.Encoding.UTF8); }
+        catch (Exception ex) { content = $"[Error reading {filename}: {ex.Message}]"; }
+
+        StringBuilder sb = new StringBuilder();
+        sb.AppendLine($"The following is the full content of {filename}:");
+        sb.AppendLine();
+        sb.AppendLine(content);
+        sb.AppendLine();
+        sb.AppendLine("---");
+        sb.AppendLine();
+        sb.Append(prompt);
+
+        return AppendHints(sb.ToString(), context.Hints);
+    }
+
+    /// <summary>
+    /// Builds the merge prompt for a synthesis phase.
+    /// Reads all partial output files and injects their full content into the merge prompt
+    /// so the LLM can deduplicate and reconcile across component groups.
+    /// </summary>
+    public string BuildSynthesisMergePrompt(
+        PhaseSpec phase,
+        RunContext context,
+        IReadOnlyList<string> partialOutputPaths)
+    {
+        if (phase.MergePrompt is null)
+            throw new InvalidOperationException($"Phase {phase.Number} has no MergePrompt.");
+
+        StringBuilder sb = new StringBuilder();
+        sb.AppendLine("The following partial composition inventories from individual component groups are provided:");
+        sb.AppendLine();
+
+        foreach (string path in partialOutputPaths)
+        {
+            string filename = Path.GetFileName(path);
+            string content;
+            try
+            {
+                content = File.ReadAllText(path, System.Text.Encoding.UTF8);
+            }
+            catch
+            {
+                sb.AppendLine($"=== {filename} === (could not be read)");
+                sb.AppendLine();
+                continue;
+            }
+
+            sb.AppendLine($"=== {filename} ===");
+            sb.AppendLine(content);
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("---");
+        sb.AppendLine();
+
+        string prompt = SubstituteCommon(phase.MergePrompt, context);
+        sb.Append(prompt);
+
+        return AppendHints(sb.ToString(), context.Hints);
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────────
 
     /// <summary>

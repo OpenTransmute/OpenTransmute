@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using OpenTransmute.Data;
 
@@ -10,9 +11,11 @@ using OpenTransmute.Data;
 namespace OpenTransmute.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260524185522_AddVerifiedAt")]
+    partial class AddVerifiedAt
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.8");
@@ -67,9 +70,6 @@ namespace OpenTransmute.Data.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
-                    b.Property<Guid?>("ProductId")
-                        .HasColumnType("TEXT");
-
                     b.Property<string>("Source")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -78,8 +78,6 @@ namespace OpenTransmute.Data.Migrations
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("ProductId");
 
                     b.ToTable("Projects");
                 });
@@ -127,28 +125,6 @@ namespace OpenTransmute.Data.Migrations
                     b.HasIndex("ProjectId");
 
                     b.ToTable("InventoryItems");
-                });
-
-            modelBuilder.Entity("OpenTransmute.Models.Product", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Description")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("Products");
                 });
 
             modelBuilder.Entity("OpenTransmute.Models.SavedComposeJob", b =>
@@ -302,16 +278,6 @@ namespace OpenTransmute.Data.Migrations
                     b.Navigation("Project");
                 });
 
-            modelBuilder.Entity("OpenTransmute.Models.DecomposedProject", b =>
-                {
-                    b.HasOne("OpenTransmute.Models.Product", "Product")
-                        .WithMany("Projects")
-                        .HasForeignKey("ProductId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("Product");
-                });
-
             modelBuilder.Entity("OpenTransmute.Models.InventoryItem", b =>
                 {
                     b.HasOne("OpenTransmute.Models.DecomposedProject", "Project")
@@ -328,11 +294,6 @@ namespace OpenTransmute.Data.Migrations
                     b.Navigation("Items");
 
                     b.Navigation("PhaseOutputs");
-                });
-
-            modelBuilder.Entity("OpenTransmute.Models.Product", b =>
-                {
-                    b.Navigation("Projects");
                 });
 #pragma warning restore 612, 618
         }

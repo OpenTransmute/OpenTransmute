@@ -45,6 +45,17 @@
                                     </MudRadio>
                                 </MudPaper>
 
+                                <MudPaper Outlined="true" Class="@($"pa-3 rounded-lg {(Llm.Orchestrator == OrchestratorType.CopilotCli ? "ot-engine-selected" : "")}")">
+                                    <MudRadio Value="OrchestratorType.CopilotCli" Color="Color.Primary">
+                                        <MudStack Spacing="0">
+                                            <MudText Typo="Typo.body1" Style="font-weight:600">GitHub Copilot CLI</MudText>
+                                            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                                Uses your existing GitHub login — runs the <code>copilot</code> binary in non-interactive mode
+                                            </MudText>
+                                        </MudStack>
+                                    </MudRadio>
+                                </MudPaper>
+
                                 <MudPaper Outlined="true" Class="@($"pa-3 rounded-lg {(Llm.Orchestrator == OrchestratorType.Ollama ? "ot-engine-selected" : "")}")">
                                     <MudRadio Value="OrchestratorType.Ollama" Color="Color.Secondary">
                                         <MudStack Spacing="0">
@@ -103,6 +114,10 @@
                         @if (Llm.Orchestrator == OrchestratorType.ClaudeCode)
                         {
                             <span> (Claude Code ignores these — model is governed by the CLI.)</span>
+                        }
+                        @if (Llm.Orchestrator == OrchestratorType.CopilotCli)
+                        {
+                            <span> (Use model names from the Copilot CLI <code>/model</code> picker.)</span>
                         }
                     </MudText>
                 </CardHeaderContent>
@@ -165,7 +180,7 @@
                         <MudNumericField @bind-Value="Llm.TimeoutMinutes" Label="HTTP Timeout (min)"
                                          Min="1" Max="120"
                                          HelperText="For OpenAI / Ollama requests"
-                                         Disabled="@(Llm.Orchestrator == OrchestratorType.ClaudeCode)" />
+                                         Disabled="@(Llm.Orchestrator == OrchestratorType.ClaudeCode || Llm.Orchestrator == OrchestratorType.CopilotCli)" />
                     </MudItem>
                     <MudItem xs="12" sm="4">
                         <MudNumericField @bind-Value="Llm.ThickMaxOutputTokens" Label="Thick Max Tokens"

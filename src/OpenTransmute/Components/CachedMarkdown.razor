@@ -1,0 +1,24 @@
+<MudPaper Elevation="0" Class="@Class" Style="@Style">
+    <MudMarkdown Value="@Value" />
+</MudPaper>
+
+@code {
+    [Parameter] public string Value { get; set; } = string.Empty;
+    [Parameter] public string Class { get; set; } = string.Empty;
+    [Parameter] public string Style { get; set; } = string.Empty;
+
+    private string? _renderedValue;
+
+    /// <summary>
+    /// Only re-render when the markdown content actually changes.
+    /// Prevents MudMarkdown from re-parsing on every parent timer tick.
+    /// </summary>
+    protected override bool ShouldRender()
+    {
+        if (string.Equals(_renderedValue, Value, StringComparison.Ordinal))
+            return false;
+
+        _renderedValue = Value;
+        return true;
+    }
+}

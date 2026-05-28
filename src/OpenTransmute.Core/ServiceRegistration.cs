@@ -48,6 +48,7 @@ public static class ServiceRegistration
 
         // LLM executor implementations — all registered; JobOrchestrator selects by OrchestratorType
         services.AddSingleton<ILlmExecutor, ClaudeSubprocessExecutor>();
+        services.AddSingleton<ILlmExecutor, CopilotSubprocessExecutor>();
         services.AddSingleton<ILlmExecutor>(sp =>
             new OpenAiChatExecutor(
                 sp.GetRequiredService<ILogger<OpenAiChatExecutor>>(),

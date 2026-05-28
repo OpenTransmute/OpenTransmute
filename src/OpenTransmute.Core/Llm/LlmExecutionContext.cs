@@ -61,16 +61,51 @@ public sealed class LlmExecutionContext
     public int MaxTurns { get; init; } = 10;
 
     /// <summary>Maximum output tokens. Zero means use the backend default.</summary>
-    public int MaxOutputTokens { get; init; }
+    public int MaxOutputTokens { get; set; }
 
     /// <summary>HTTP timeout applied to OpenAI-compatible calls. Default 10 minutes.</summary>
-    public TimeSpan Timeout { get; init; } = TimeSpan.FromMinutes(10);
+    public TimeSpan Timeout { get; set; } = TimeSpan.FromMinutes(10);
 
     /// <summary>
     /// Content of the project's .transmuteignore file, passed to the file-system plugin
     /// when <see cref="EnableFileTools"/> is true. Null disables ignore filtering.
     /// </summary>
     public string? IgnoreContent { get; init; }
+
+    /// <summary>
+    /// When set, the model is instructed to write its output directly to this absolute file path
+    /// instead of producing text on stdout. Used by agentic backends (Claude, Copilot) that have
+    /// native file-write tools. The orchestrator checks this path after the call completes.
+    /// Null = model returns output as text (default for OpenAI/Ollama).
+    /// </summary>
+    public string? OutputFilePath { get; init; }
+
+    /// <summary>
+    /// When true, the executor registers an <c>AppendResults</c> tool that the model calls
+    /// incrementally to write output to a temp file. Each tool invocation atomically persists
+    /// content to disk, surviving server errors that would kill a streaming stdout response.
+    /// The executor reads the temp file on session completion and returns it as the output.
+    /// </summary>
+    public bool EnableAppendResultsTool { get; init; }
+
+    /// <summary>
+    /// Directory where executor stream logs are written. Set by the orchestrator to
+    /// <c>Output/Logs/{ProjectName}/</c>. Null disables file-based logging.
+    /// </summary>
+    public string? LogDirectory { get; init; }
+
+    /// <summary>
+    /// Label identifying this call within a run, used in log file names.
+    /// Examples: "phase-01", "phase-03-05", "phase-06-merge", "compose", "implement".
+    /// </summary>
+    public string? PhaseLabel { get; init; }
+
+    /// <summary>
+    /// When true, the executor appends JSON-specific output instructions instead of
+    /// "plain text to stdout." The model is told to output a single JSON object with
+    /// no markdown wrapping, no code fences, and no preamble — start with { and end with }.
+    /// </summary>
+    public bool JsonOutputMode { get; init; }
 
     #endregion
 }

@@ -13,6 +13,7 @@ public class JobStore
     private readonly ConcurrentDictionary<Guid, DecomposeJob> _decompose = new();
     private readonly ConcurrentDictionary<Guid, ComposeJob> _compose = new();
     private readonly ConcurrentDictionary<Guid, ImplementJob> _implement = new();
+    private readonly ConcurrentDictionary<Guid, VerifyJob> _verify = new();
 
     #endregion
 
@@ -30,6 +31,10 @@ public class JobStore
     public IEnumerable<ImplementJob> AllImplementJobs =>
         _implement.Values.OrderByDescending(j => j.CreatedAt);
 
+    /// <summary>All verify jobs ordered by creation time, newest first.</summary>
+    public IEnumerable<VerifyJob> AllVerifyJobs =>
+        _verify.Values.OrderByDescending(j => j.CreatedAt);
+
     #endregion
 
     #region Methods
@@ -43,6 +48,9 @@ public class JobStore
     /// <summary>Registers a implement job in the store.</summary>
     public void Add(ImplementJob job) => _implement[job.Id] = job;
 
+    /// <summary>Registers a verify job in the store.</summary>
+    public void Add(VerifyJob job) => _verify[job.Id] = job;
+
     /// <summary>Returns the decompose job with the given ID, or null if not found.</summary>
     public DecomposeJob? GetDecompose(Guid id) => _decompose.GetValueOrDefault(id);
 
@@ -51,6 +59,9 @@ public class JobStore
 
     /// <summary>Returns the implement job with the given ID, or null if not found.</summary>
     public ImplementJob? GetImplement(Guid id) => _implement.GetValueOrDefault(id);
+
+    /// <summary>Returns the verify job with the given ID, or null if not found.</summary>
+    public VerifyJob? GetVerify(Guid id) => _verify.GetValueOrDefault(id);
 
     #endregion
 }

@@ -53,6 +53,35 @@ public sealed class PhaseSpec
     public string? DiscoveryPrompt  { get; init; }   // first code block — generates the item list
     public string? TemplatePrompt   { get; init; }   // second code block — run once per item
 
+    // ── Synthesis phase (Phase 6) ─────────────────────────────────────────────
+
+    /// <summary>
+    /// True when this phase synthesizes outputs from another phase's expansion results,
+    /// processing each item separately and then merging. Avoids context exhaustion on
+    /// large codebases by chunking the work.
+    /// </summary>
+    public bool IsSynthesis { get; init; }
+
+    /// <summary>
+    /// The phase number whose discovery JSON and output files are consumed by this synthesis.
+    /// E.g. <c>3</c> means load <c>03-00-discovery.json</c> and process each 03-xx spec file.
+    /// </summary>
+    public int? SynthesisSourcePhase { get; init; }
+
+    /// <summary>Per-chunk prompt — run once per source item. First code block in a synthesis phase.</summary>
+    public string? ChunkPrompt { get; init; }
+
+    /// <summary>Merge prompt — run once at the end with all partial outputs. Second code block in a synthesis phase.</summary>
+    public string? MergePrompt { get; init; }
+
+    // ── Output mode ───────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// When true, the model uses an <c>AppendResults</c> tool to write output incrementally
+    /// to a temp file instead of streaming to stdout. Parsed from <c>**Output Mode:** append-results</c>.
+    /// </summary>
+    public bool UseAppendResults { get; init; }
+
     #endregion
 
     #region Methods

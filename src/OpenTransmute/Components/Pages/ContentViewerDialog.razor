@@ -1,0 +1,70 @@
+@namespace OpenTransmute.Components.Pages
+
+<MudDialog>
+    <TitleContent>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.Description" />
+            <MudText Typo="Typo.h6" Style="font-weight:600">@Title</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        @if (_editing)
+        {
+            <MudTextField T="string"
+                          @bind-Value="_editContent"
+                          Lines="30"
+                          Style="font-family:monospace;font-size:0.75rem"
+                          FullWidth="true"
+                          Variant="Variant.Outlined" />
+        }
+        else
+        {
+            <CachedMarkdown Value="@Content"
+                            Class="pa-3"
+                            Style="background:var(--mud-palette-background-grey);border-radius:4px" />
+        }
+    </DialogContent>
+    <DialogActions>
+        @if (_editing)
+        {
+            <MudButton OnClick="Save" Variant="Variant.Filled" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.Save">Save</MudButton>
+            <MudButton OnClick="@(() => _editing = false)">Cancel Edit</MudButton>
+        }
+        else
+        {
+            @if (AllowEdit)
+            {
+                <MudButton OnClick="StartEdit"
+                           StartIcon="@Icons.Material.Filled.Edit"
+                           Color="Color.Warning">Edit</MudButton>
+            }
+            <MudButton OnClick="Close" Variant="Variant.Filled">Close</MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = null!;
+
+    /// <summary>Dialog title shown in the header bar.</summary>
+    [Parameter] public string Title { get; set; } = string.Empty;
+
+    /// <summary>Markdown or rendered content to display.</summary>
+    [Parameter] public string Content { get; set; } = string.Empty;
+
+    /// <summary>When true, an Edit button is shown that lets the user modify content.</summary>
+    [Parameter] public bool AllowEdit { get; set; }
+
+    private bool _editing;
+    private string _editContent = string.Empty;
+
+    private void StartEdit()
+    {
+        _editContent = Content;
+        _editing = true;
+    }
+
+    private void Save() => MudDialog.Close(DialogResult.Ok(_editContent));
+    private void Close() => MudDialog.Cancel();
+}

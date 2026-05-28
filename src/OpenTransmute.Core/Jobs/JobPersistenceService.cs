@@ -57,6 +57,35 @@ public class JobPersistenceService(ILogger<JobPersistenceService> logger)
     }
 
     /// <summary>
+    /// Deletes the old job.json file when a job's project name changes.
+    /// Safe to call even if the old file doesn't exist. Removes the containing
+    /// directory if it becomes empty.
+    /// </summary>
+    /// <param name="outputRoot">The root directory where DB/Jobs/ lives.</param>
+    /// <param name="oldProjectName">The previous project name before the rename.</param>
+    public void DeleteJobFile(string outputRoot, string oldProjectName)
+    {
+        if (string.IsNullOrWhiteSpace(outputRoot) || string.IsNullOrWhiteSpace(oldProjectName))
+            return;
+
+        string dir = Path.Combine(outputRoot, "DB", "Jobs", oldProjectName);
+        string path = Path.Combine(dir, "job.json");
+
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+
+            if (Directory.Exists(dir) && Directory.GetFileSystemEntries(dir).Length == 0)
+                Directory.Delete(dir);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to delete old job file at {Path}", path);
+        }
+    }
+
+    /// <summary>
     /// Scans DB/Jobs/*/job.json under <paramref name="outputRoot"/> and returns
     /// hydrated DecomposeJob instances (all in a terminal state — never running).
     /// </summary>
@@ -82,7 +111,7 @@ public class JobPersistenceService(ILogger<JobPersistenceService> logger)
                 {
                     job = record.ToJob();
                     // Jobs loaded from disk are never in a mid-run state
-                    if (job.Status == JobStatus.Running)
+                    if (job.Status is JobStatus.Running or JobStatus.Pending)
                         job.Status = JobStatus.Failed;
                 }
             }

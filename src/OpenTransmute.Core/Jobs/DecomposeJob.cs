@@ -64,7 +64,7 @@ public class DecomposeJob : JobBase
 
     #region Properties
 
-    public DecomposeOptions Options { get; init; } = null!;
+    public DecomposeOptions Options { get; set; } = null!;
 
     /// <summary>
     /// Local filesystem path after source fetching.

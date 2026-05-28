@@ -23,6 +23,11 @@ These rules apply to every phase. They are not suggestions.
 - **Expansion specs (Phase 3, Step 2):** Your entire response MUST be valid Markdown.
   Same rules as simple phases above.
 
+- **SHELL TOOLS ARE BLOCKED.** Do NOT use shell, powershell, bash, or any command-line
+  execution tools. They will be rejected and you will waste a turn. Use only file-reading
+  tools (view, read, glob, grep). If a glob result is too large, use a narrower pattern
+  (e.g. `src/**/*.java` instead of `**/*`) or use grep to find specific content.
+
 The orchestrator captures your stdout exactly as-is and writes it to disk.
 Any text outside the required format corrupts the output file.
 
@@ -71,8 +76,13 @@ Write a short index document containing:
 
 1. One paragraph describing what the project is and what problem it solves.
 
-2. A table listing every other map document (filename + one-line description
-   of what it contains).
+2. A table listing every other map document by phase and purpose.
+   Do NOT predict filenames — list by phase description only:
+   Phase 1 Structural Survey, Phase 2 Initialization & Runtime Flow,
+   Phase 3 Component Specifications (one document per component cluster),
+   Phase 4 Data Formats & Protocols, Phase 5 Re-implementation Checklist,
+   Phase 6 Composition Inventory, Phase 7 Ethos & Style Fingerprint.
+   For each, write a one-line description of what a reader will find there.
 
 3. "Architecture in one paragraph" — describe how the major subsystems fit
    together at runtime, without enumerating every detail.  A reader should be
@@ -82,6 +92,12 @@ Write a short index document containing:
    made that a re-implementer must understand before writing any code.  For
    each: state the decision, and explain what breaks or becomes hard if the
    re-implementer ignores it.
+
+REQUIRED SECTIONS (every section below must appear as a heading in your output):
+  1. Project description
+  2. Document index table
+  3. Architecture in one paragraph
+  4. Key design decisions
 
 OUTPUT RULE: Respond with valid Markdown only. No preamble. No sign-off.
 Start with the first heading. End with the last sentence.
@@ -119,6 +135,13 @@ Project root: <path>
    CMakeLists, etc.) and list every defined task with its command and purpose.
 
 Use tables where lists would be repetitive.  Do not summarize — be exhaustive.
+
+REQUIRED SECTIONS (every section below must appear as a heading in your output):
+  1. Directory tree
+  2. Entry points
+  3. Configuration files
+  4. External dependencies
+  5. Build/test/install toolchain
 
 OUTPUT RULE: Respond with valid Markdown only. No preamble. No sign-off.
 Start with the first heading. End with the last sentence.
@@ -162,6 +185,12 @@ Document the following as a numbered sequence:
 Use a flow diagram in Mermaid syntax if it helps clarify ordering.  Then write
 prose that fully explains each step — the diagram is a supplement, not a
 replacement.
+
+REQUIRED SECTIONS (every section below must appear as a heading in your output):
+  1. Startup sequence
+  2. Hook/event/callback registration points
+  3. Shutdown/cleanup sequence
+  4. Background/async tasks
 
 OUTPUT RULE: Respond with valid Markdown only. No preamble. No sign-off.
 Start with the first heading. End with the last sentence.
@@ -260,6 +289,17 @@ each component include:
 
 Be exhaustive.  Do not omit a function because it seems simple.
 
+REQUIRED SECTIONS (every section below must appear for each component):
+  1. Purpose
+  2. Public interface
+  3. Internal state
+  4. Algorithms
+  5. Integration points
+  6. Configuration
+  7. Extension interface (if applicable — state "N/A" if not)
+  8. Edge cases and known quirks
+  9. Composition extracts
+
 OUTPUT RULE: Respond with valid Markdown only. No preamble. No sign-off.
 Start with the first heading. End with the last sentence.
 ```
@@ -298,6 +338,11 @@ You are mapping a project for re-implementation.
 
 Be exhaustive.  A re-implementer must be able to pass all interoperability tests
 using only this document.
+
+REQUIRED SECTIONS (every section below must appear as a heading in your output):
+  1. File formats
+  2. Inter-process/inter-component protocols
+  3. Public API surfaces
 
 OUTPUT RULE: Respond with valid Markdown only. No preamble. No sign-off.
 Start with the first heading. End with the last sentence.
@@ -353,6 +398,14 @@ Output a single Markdown checklist.  Keep each item to one line or a short
 paragraph.  This document is the starting point for a project README in the
 re-implementation repo.
 
+REQUIRED SECTIONS (every section below must appear as a heading in your output):
+  1. Dependency inventory
+  2. Implementation order
+  3. Acceptance criteria
+  4. Compatibility traps
+  5. What to skip
+  6. Security checklist (including Malicious intent indicators sub-section)
+
 OUTPUT RULE: Respond with valid Markdown only. No preamble. No sign-off.
 Start with the first heading. End with the last sentence.
 ```
@@ -363,7 +416,9 @@ Start with the first heading. End with the last sentence.
 
 **Goal:** Synthesize everything extracted in Phase 3 into a single, flat document
 organized in the terms that compose.md expects.  This is the direct handoff between
-decompose and compose.
+decompose and compose.  The model reads all 03-xx component specification files,
+processes each group, deduplicates cross-component patterns, and produces a single
+merged composition inventory.
 **Model Weight:** regular
 **Prior Context:** 3
 
@@ -478,6 +533,16 @@ non-trivial score.  Do not give every item a 1.
 Output as a flat, scannable document.  No prose padding.  Every entry must be
 concrete and self-contained — a reader with no access to the source code must be
 able to use this document as a complete reference.
+
+REQUIRED SECTIONS (every section below must appear as a heading in your output):
+  1. Algorithms
+  2. Design Patterns
+  3. Invariants
+  4. Data Transformations
+  5. Domain Vocabulary
+  6. Architectural Primitives
+  7. Key Abstractions
+  8. Ethos Fingerprint (with all listed sub-categories)
 
 OUTPUT RULE: Respond with valid Markdown only. No preamble. No sign-off.
 Start with the first heading. End with the last sentence.
@@ -629,6 +694,23 @@ inconsistent, where it shows signs of multiple authors with different habits,
 and where it appears to have evolved away from an earlier style.
 
 ---
+
+CODE EXAMPLES MUST BE SHORT: 2 to 10 lines maximum, showing the pattern or
+identifier.  Do NOT copy entire files, methods, or large blocks of source code.
+If more context is needed, describe it in prose.
+
+REQUIRED SECTIONS (every section below must appear as a heading in your output):
+  1. Naming Conventions
+  2. Error Handling Philosophy
+  3. Abstraction Discipline
+  4. Logging and Observability
+  5. Concurrency and Async Patterns
+  6. Configuration and Magic Values
+  7. Dependency and Coupling Style
+  8. Comment and Documentation Style
+  9. Code Organisation Preferences
+  10. Test Philosophy
+  11. Overall Character
 
 OUTPUT RULE: Respond with valid Markdown only. No preamble. No sign-off.
 Start with the first heading. End with the last sentence.

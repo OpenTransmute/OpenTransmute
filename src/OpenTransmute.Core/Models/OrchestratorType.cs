@@ -18,5 +18,12 @@ public enum OrchestratorType
     /// Calls the OpenAI API (or a compatible endpoint) via Microsoft.Extensions.AI.
     /// Caller supplies API key, optional custom endpoint, and thick/regular/thin model names.
     /// </summary>
-    OpenAI
+    OpenAI,
+
+    /// <summary>
+    /// Invokes the GitHub Copilot CLI (copilot) as a subprocess in non-interactive prompt mode.
+    /// Uses the user's existing GitHub OAuth session or GH_TOKEN / GITHUB_TOKEN env var.
+    /// Supports model selection via --model and tool control via --allow-tool / --deny-tool.
+    /// </summary>
+    CopilotCli
 }

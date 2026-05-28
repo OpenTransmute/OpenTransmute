@@ -23,8 +23,17 @@ public class DecomposedProject
     /// <summary>UTC timestamp of the most recent successful decompose run.</summary>
     public DateTime DecomposedAt { get; set; }
 
+    /// <summary>UTC timestamp of the most recent successful verification run. Null = not verified.</summary>
+    public DateTime? VerifiedAt { get; set; }
+
     /// <summary>Git commit hash of the source tree at decompose time, if available.</summary>
     public string? CommitHash { get; set; }
+
+    /// <summary>FK to the product this project belongs to. Null = ungrouped.</summary>
+    public Guid? ProductId { get; set; }
+
+    /// <summary>The product this project is grouped under.</summary>
+    public Product? Product { get; set; }
 
     /// <summary>Inventory items extracted from this project's composition inventory (Phase 6).</summary>
     public ICollection<InventoryItem> Items { get; set; } = new List<InventoryItem>();

@@ -1,23 +1,31 @@
 @page "/projects"
 @using Microsoft.EntityFrameworkCore
+@using System.Text.Json
+@using OpenTransmute.Data
 @using OpenTransmute.Models
 @using OpenTransmute.Inventory
-@inject IDbContextFactory<OpenTransmute.Data.AppDbContext> DbFactory
+@using OpenTransmute.Jobs
+@using OpenTransmute.Orchestration
+@using OpenTransmute.Services
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IDialogService DialogService
 @inject NavigationManager Nav
 @inject InventoryParser InventoryParser
+@inject JobStore JobStore
+@inject JobQueue JobQueue
+@inject LlmSettingsService LlmSettings
 @namespace OpenTransmute.Components.Pages
+@implements IDisposable
 
 <PageTitle>Projects — OpenTransmute</PageTitle>
 
-<MudStack Row="false" Spacing="1" Class="mb-6">
-    <MudText Typo="Typo.h5">Decomposed Projects</MudText>
-    <MudText Typo="Typo.body2" Class="mud-text-secondary">
-        All projects that have been decomposed and stored in the database.
-        Select a project to browse its spec files, then transmute it into a new implementation.
-    </MudText>
-</MudStack>
+<MudText Typo="Typo.h5" Class="mb-4">Projects</MudText>
 
-@if (_projects.Count == 0)
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" />
+}
+else if (_projects.Count == 0)
 {
     <MudPaper Elevation="1" Class="pa-8">
         <MudStack AlignItems="AlignItems.Center" Spacing="2">
@@ -31,205 +39,785 @@
 }
 else
 {
-    @foreach (var project in _projects)
-    {
-        bool expanded = _expanded.Contains(project.Id);
-        <MudCard Elevation="2" Class="mb-4">
-            <MudCardHeader>
-                <CardHeaderContent>
-                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-                        <MudIcon Icon="@Icons.Material.Filled.AccountTree" Color="Color.Primary" />
-                        <MudText Typo="Typo.h6" Style="font-weight:600">@project.Name</MudText>
-                        <MudChip T="string" Size="Size.Small" Color="Color.Default">
-                            @project.PhaseOutputs.Count file(s)
-                        </MudChip>
-                        <MudChip T="string" Size="Size.Small" Color="Color.Secondary">
-                            @project.Items.Count item(s)
-                        </MudChip>
-                    </MudStack>
-                    <MudText Typo="Typo.caption" Class="mud-text-secondary mt-1">
-                        @project.Source &nbsp;·&nbsp; decomposed @project.DecomposedAt.ToLocalTime().ToString("g")
-                    </MudText>
-                </CardHeaderContent>
-                <CardHeaderActions>
-                    <MudStack Row="true" Spacing="1">
-                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
-                                   StartIcon="@Icons.Material.Filled.AutoFixHigh"
-                                   OnClick="@(() => Nav.NavigateTo($"/transmute?project={Uri.EscapeDataString(project.Name)}"))">
-                            Transmute
-                        </MudButton>
-                        <MudIconButton Icon="@Icons.Material.Filled.Sync"
-                                       Size="Size.Small"
-                                       Title="Refresh files from disk into database"
-                                       Disabled="@_refreshing.Contains(project.Id)"
-                                       OnClick="@(() => RefreshProjectFilesAsync(project))" />
-                        <MudIconButton Icon="@(expanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
-                                       Size="Size.Small"
-                                       OnClick="@(() => ToggleExpand(project.Id))" />
-                    </MudStack>
-                </CardHeaderActions>
-            </MudCardHeader>
+    @* ── Product management bar ── *@
+    <MudPaper Elevation="1" Class="pa-3 mb-4">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Style="flex-wrap:wrap">
+            <MudIcon Icon="@Icons.Material.Filled.Category" Color="Color.Tertiary" />
+            <MudText Typo="Typo.subtitle2" Style="font-weight:600">Products</MudText>
 
-            @if (expanded)
+            @foreach (Product product in _products2)
             {
-                <MudCardContent>
-                    @if (!project.PhaseOutputs.Any())
-                    {
-                        <MudText Typo="Typo.body2" Class="mud-text-secondary">
-                            No phase outputs stored in the database for this project.
-                            Phase outputs are saved when you run a decompose after this update.
-                        </MudText>
-                    }
-                    else
-                    {
-                        <MudExpansionPanels MultiExpansion="true" Elevation="0">
-                            @foreach (var phase in project.PhaseOutputs.OrderBy(p => p.PhaseNumber).ThenBy(p => p.Filename))
-                            {
-                                bool isEditing = _editing.ContainsKey(phase.Id);
-                                <MudExpansionPanel>
-                                    <TitleContent>
-                                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-                                            <MudChip T="string" Size="Size.Small" Color="Color.Primary" Style="min-width:32px">
-                                                @phase.PhaseNumber
-                                            </MudChip>
-                                            <MudText Typo="Typo.body2" Style="font-family:monospace">@phase.Filename</MudText>
-                                            <MudText Typo="Typo.caption" Class="mud-text-secondary">
-                                                @(phase.Content.Length / 1024)KB · @phase.CreatedAt.ToLocalTime().ToString("g")
-                                            </MudText>
-                                            <span @onclick:stopPropagation="true">
-                                                <MudIconButton Icon="@Icons.Material.Filled.Edit"
-                                                               Size="Size.Small"
-                                                               Title="Edit file"
-                                                               Color="@(isEditing ? Color.Warning : Color.Default)"
-                                                               OnClick="@(() => ToggleEdit(phase))" />
-                                            </span>
-                                        </MudStack>
-                                    </TitleContent>
-                                    <ChildContent>
-                                        @if (isEditing)
-                                        {
-                                            <MudStack Spacing="2">
-                                                <MudTextField T="string"
-                                                              Value="_editing[phase.Id]"
-                                                              ValueChanged="@(v => _editing[phase.Id] = v)"
-                                                              Lines="24"
-                                                              Style="font-family:monospace;font-size:0.75rem"
-                                                              FullWidth="true"
-                                                              Variant="Variant.Outlined" />
-                                                <MudStack Row="true" Spacing="1">
-                                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
-                                                               StartIcon="@Icons.Material.Filled.Save"
-                                                               Disabled="@_saving.Contains(phase.Id)"
-                                                               OnClick="@(() => SavePhaseOutputAsync(project, phase))">
-                                                        @(_saving.Contains(phase.Id) ? "Saving…" : "Save")
-                                                    </MudButton>
-                                                    <MudButton Variant="Variant.Text" Size="Size.Small"
-                                                               OnClick="@(() => _editing.Remove(phase.Id))">
-                                                        Cancel
-                                                    </MudButton>
-                                                </MudStack>
-                                            </MudStack>
-                                        }
-                                        else
-                                        {
-                                            <MudPaper Elevation="0" Class="pa-3" Style="background:var(--mud-palette-background-grey);border-radius:4px;max-height:400px;overflow-y:auto">
-                                                <MudMarkdown Value="@phase.Content" />
-                                            </MudPaper>
-                                        }
-                                    </ChildContent>
-                                </MudExpansionPanel>
-                            }
-                        </MudExpansionPanels>
-                    }
-                </MudCardContent>
+                bool isSelected = _selectedProduct?.Id == product.Id;
+                <MudChip T="string" Size="Size.Small"
+                         Color="@(isSelected ? Color.Primary : Color.Default)"
+                         Variant="@(isSelected ? Variant.Filled : Variant.Outlined)"
+                         Style="cursor:pointer"
+                         OnClick="@(() => _selectedProduct = isSelected ? null : product)">
+                    @product.Name (@product.Projects.Count)
+                </MudChip>
             }
-        </MudCard>
-    }
+            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default"
+                     Style="cursor:pointer"
+                     OnClick="@(() => _selectedProduct = _ungroupedPlaceholder)">
+                Ungrouped (@_projects.Count(p => p.ProductId is null))
+            </MudChip>
+
+            <MudSpacer />
+            @if (_selectedProduct is not null && _selectedProduct.Id != Guid.Empty)
+            {
+                <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.Build"
+                           OnClick="@(() => OpenProductFixDialogAsync(_selectedProduct))">
+                    Fix @_selectedProduct.Name
+                </MudButton>
+            }
+            <MudTextField T="string" @bind-Value="_newProductName" Placeholder="New product…"
+                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Style="max-width:200px" Immediate="true"
+                          Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Add"
+                          OnAdornmentClick="CreateProductAsync" />
+        </MudStack>
+    </MudPaper>
+    <MudGrid Spacing="3">
+        @foreach (var project in FilteredProjects)
+        {
+            bool expanded = _expanded.Contains(project.Id);
+            bool isEditing = _editingProject == project.Id;
+
+            <MudItem xs="12" sm="@(expanded ? 12 : 6)" md="@(expanded ? 12 : 4)" lg="@(expanded ? 12 : 3)">
+                <MudCard Elevation="2" Class="ot-feature-card">
+                    @* ── Compact card face ── *@
+                    <MudCardContent Style="cursor:pointer" @onclick="@(() => ToggleExpandAsync(project))">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+                            <div class="ot-feature-icon-wrap" style="@(project.VerifiedAt.HasValue ? "background:rgba(76,175,80,0.1)" : "background:rgba(21,101,192,0.1)")">
+                                <MudIcon Icon="@(project.VerifiedAt.HasValue ? Icons.Material.Filled.Verified : Icons.Material.Filled.AccountTree)"
+                                         Style="@(project.VerifiedAt.HasValue ? "color:#4CAF50;font-size:1.5rem" : "color:#1565C0;font-size:1.5rem")" />
+                            </div>
+                            <MudStack Spacing="0" Style="min-width:0;flex:1">
+                                <MudText Typo="Typo.h6" Style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+                                    @project.Name
+                                </MudText>
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                    @project.DecomposedAt.ToLocalTime().ToString("MMM d, yyyy")
+                                </MudText>
+                            </MudStack>
+                        </MudStack>
+
+                        <MudStack Row="true" Spacing="1" Style="flex-wrap:wrap">
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
+                                     Icon="@Icons.Material.Filled.Description">
+                                @GetPhaseCount(project.Id) phases
+                            </MudChip>
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Secondary"
+                                     Icon="@Icons.Material.Filled.Inventory2">
+                                @GetItemCount(project.Id) items
+                            </MudChip>
+                            @if (project.VerifiedAt.HasValue)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Success"
+                                         Icon="@Icons.Material.Filled.CheckCircle">
+                                    Verified @project.VerifiedAt.Value.ToLocalTime().ToString("MMM d")
+                                </MudChip>
+                            }
+                            @if (IsVerifyRunning(project.Name))
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Warning"
+                                         Icon="@Icons.Material.Filled.HourglassTop">
+                                    Verifying…
+                                </MudChip>
+                            }
+                            @if (project.Product is not null)
+                            {
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Tertiary"
+                                         Icon="@Icons.Material.Filled.Category">
+                                    @project.Product.Name
+                                </MudChip>
+                            }
+                        </MudStack>
+                    </MudCardContent>
+
+                    @* ── Expanded detail ── *@
+                    @if (expanded)
+                    {
+                        <MudCardActions>
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.AutoFixHigh"
+                                       OnClick="@(() => Nav.NavigateTo($"/transmute?project={Uri.EscapeDataString(project.Name)}"))">
+                                Transmute
+                            </MudButton>
+                            <MudIconButton Icon="@Icons.Material.Filled.FactCheck"
+                                           Size="Size.Small" Color="Color.Tertiary"
+                                           Title="Run verification audit"
+                                           Disabled="@IsVerifyRunning(project.Name)"
+                                           OnClick="@(() => StartVerifyAsync(project))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Build"
+                                           Size="Size.Small" Color="Color.Success"
+                                           Title="Apply verification fixes to decomposition files"
+                                           Disabled="@(!project.VerifiedAt.HasValue || _applyingFixes.Contains(project.Id))"
+                                           OnClick="@(() => ApplyVerificationFixesAsync(project))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                           Size="Size.Small" Color="Color.Warning"
+                                           Title="Edit project metadata"
+                                           OnClick="@(() => StartProjectEdit(project))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Sync"
+                                           Size="Size.Small" Color="Color.Info"
+                                           Title="Refresh files from disk"
+                                           Disabled="@_refreshing.Contains(project.Id)"
+                                           OnClick="@(() => RefreshProjectFilesAsync(project))" />
+                            <MudSpacer />
+                            <MudSelect T="Guid?" Value="project.ProductId" Label="Product" Margin="Margin.Dense"
+                                       Variant="Variant.Outlined" Style="max-width:180px"
+                                       ValueChanged="@(val => AssignProductAsync(project, val))">
+                                <MudSelectItem T="Guid?" Value="@((Guid?)null)">— None —</MudSelectItem>
+                                @foreach (Product p in _products2)
+                                {
+                                    <MudSelectItem T="Guid?" Value="@((Guid?)p.Id)">@p.Name</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudCardActions>
+                        <MudDivider />
+                        <MudCardContent>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary mb-3"
+                                     Style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                                @project.Source
+                            </MudText>
+
+                            @* ── Edit form ── *@
+                            @if (isEditing)
+                            {
+                                <MudStack Spacing="1" Class="mb-3">
+                                    <MudTextField T="string" @bind-Value="_editName"
+                                                  Label="Project Name" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                  Style="max-width:300px" />
+                                    <MudTextField T="string" @bind-Value="_editSource"
+                                                  Label="Source" Variant="Variant.Outlined" Margin="Margin.Dense" FullWidth="true" />
+                                    <MudTextField T="string" @bind-Value="_editOutputPath"
+                                                  Label="Output Path" Variant="Variant.Outlined" Margin="Margin.Dense" FullWidth="true" />
+                                    <MudStack Row="true" Spacing="1">
+                                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                                   OnClick="@(() => SaveProjectEditAsync(project))">Save</MudButton>
+                                        <MudButton Variant="Variant.Text" Size="Size.Small"
+                                                   OnClick="CancelProjectEdit">Cancel</MudButton>
+                                    </MudStack>
+                                </MudStack>
+                            }
+
+                            @* ── Live Verify Progress ── *@
+                            @{
+                                VerifyJob? verifyJob = GetVerifyJob(project.Name);
+                                bool verifyIsLive = verifyJob is not null &&
+                                    verifyJob.Status is JobStatus.Pending or JobStatus.Running;
+                                List<DocumentVerifyProgress> verifyDocs = verifyJob?.Documents.ToList() ?? new();
+                            }
+
+                            @if (verifyDocs.Count > 0)
+                            {
+                                <MudText Typo="Typo.caption" Class="mb-1 mud-text-secondary" Style="font-weight:600">
+                                    @if (verifyIsLive)
+                                    {
+                                        @:VERIFICATION PROGRESS (@verifyDocs.Count(d => d.Status == JobStatus.Completed)/@verifyDocs.Count)
+                                    }
+                                    else
+                                    {
+                                        @:LAST RUN (@verifyDocs.Count(d => d.Status == JobStatus.Completed)/@verifyDocs.Count completed)
+                                    }
+                                </MudText>
+
+                                <MudSimpleTable Dense="true" Hover="true" Class="mb-4" Style="font-size:0.8rem">
+                                    <thead>
+                                        <tr>
+                                            <th style="width:24px">#</th>
+                                            <th>Document</th>
+                                            <th style="width:70px">Status</th>
+                                            <th style="width:60px">Time</th>
+                                            <th style="width:70px">Tokens</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (DocumentVerifyProgress doc in verifyDocs)
+                                        {
+                                            <tr>
+                                                <td>@(doc.Index + 1)</td>
+                                                <td style="font-family:monospace">@doc.DocumentName</td>
+                                                <td>
+                                                    @switch (doc.Status)
+                                                    {
+                                                        case JobStatus.Pending:
+                                                            <MudChip T="string" Size="Size.Small" Color="Color.Default">Pending</MudChip>
+                                                            break;
+                                                        case JobStatus.Running:
+                                                            <MudChip T="string" Size="Size.Small" Color="Color.Warning"
+                                                                     Icon="@Icons.Material.Filled.HourglassTop">Running</MudChip>
+                                                            break;
+                                                        case JobStatus.Completed:
+                                                            <MudChip T="string" Size="Size.Small" Color="Color.Success"
+                                                                     Icon="@Icons.Material.Filled.CheckCircle">Done</MudChip>
+                                                            break;
+                                                        case JobStatus.Failed:
+                                                            <MudChip T="string" Size="Size.Small" Color="Color.Error"
+                                                                     Icon="@Icons.Material.Filled.Error">Failed</MudChip>
+                                                            break;
+                                                    }
+                                                </td>
+                                                <td>@(doc.Elapsed?.ToString(@"m\:ss") ?? "")</td>
+                                                <td>@(doc.Tokens.Total > 0 ? doc.Tokens.Total.ToString("N0") : "")</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </MudSimpleTable>
+                            }
+
+                            @* ── Verification Reports ── *@
+                            @{
+                                string verifyDir = Path.Combine(project.OutputPath, "..", "..", "..", "Output", "Verification", project.Name);
+                                string[] verifyFiles = GetVerifyFiles(verifyDir);
+                            }
+
+                            @if (verifyFiles.Length > 0)
+                            {
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-2">
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary" Style="font-weight:600">
+                                        VERIFICATION REPORTS
+                                    </MudText>
+                                    <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                                                   Size="Size.Small" Color="Color.Tertiary"
+                                                   Title="Re-run summary + remediation only"
+                                                   Disabled="@IsVerifyRunning(project.Name)"
+                                                   OnClick="@(() => StartSummaryOnlyAsync(project))" />
+                                </MudStack>
+
+                                <MudStack Row="true" Spacing="1" Class="mb-4" Style="flex-wrap:wrap">
+                                    @foreach (string vf in verifyFiles)
+                                    {
+                                        string vfName = Path.GetFileName(vf);
+                                        bool isSummary = vfName.Equals("verify-summary.md", StringComparison.OrdinalIgnoreCase);
+                                        bool isRemediation = vfName.Equals("verify-remediate.md", StringComparison.OrdinalIgnoreCase);
+
+                                        Color chipColor = isSummary ? Color.Success
+                                            : isRemediation ? Color.Warning
+                                            : Color.Tertiary;
+                                        string chipIcon = isSummary ? Icons.Material.Filled.Summarize
+                                            : isRemediation ? Icons.Material.Filled.Build
+                                            : Icons.Material.Filled.Description;
+
+                                        @* Strip "verify-" prefix for display — the section header already says what these are *@
+                                        string displayName = vfName.StartsWith("verify-", StringComparison.OrdinalIgnoreCase)
+                                            ? vfName["verify-".Length..] : vfName;
+
+                                        <MudChip T="string" Size="Size.Small" Color="chipColor"
+                                                 Icon="@chipIcon" Style="cursor:pointer"
+                                                 OnClick="@(() => ViewVerifyFileAsync(vf))">
+                                            @displayName
+                                        </MudChip>
+                                    }
+                                </MudStack>
+                            }
+
+                            @* ── Decomposition Phases ── *@
+                            @{
+                                List<PhaseInfo>? phases = _loadedPhases.GetValueOrDefault(project.Id);
+                            }
+
+                            @if (phases is null)
+                            {
+                                <MudProgressLinear Indeterminate="true" Color="Color.Primary" Style="max-width:200px" />
+                            }
+                            else if (phases.Count > 0)
+                            {
+                                <MudText Typo="Typo.caption" Class="mb-1 mud-text-secondary" Style="font-weight:600">
+                                    DECOMPOSITION PHASES
+                                </MudText>
+
+                                <MudStack Row="true" Spacing="1" Style="flex-wrap:wrap" AlignItems="AlignItems.Center">
+                                    @foreach (PhaseInfo phase in phases)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Primary"
+                                                 Icon="@Icons.Material.Filled.Description" Style="cursor:pointer"
+                                                 OnClick="@(() => ViewPhaseAsync(phase))">
+                                            @phase.Filename
+                                        </MudChip>
+                                        <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                                       Size="Size.Small" Color="Color.Warning"
+                                                       Title="@($"Edit {phase.Filename}")"
+                                                       Style="margin-left:-8px"
+                                                       OnClick="@(() => EditPhaseAsync(project, phase))" />
+                                    }
+                                </MudStack>
+                            }
+                        </MudCardContent>
+                    }
+                </MudCard>
+            </MudItem>
+        }
+    </MudGrid>
 }
 
 @code {
-    private List<OpenTransmute.Models.DecomposedProject> _projects = new();
+    #region Members
+
+    private List<DecomposedProject> _projects = new();
+    private List<Product> _products2 = new();
+    private Dictionary<Guid, int> _phaseCounts = new();
+    private Dictionary<Guid, int> _itemCounts = new();
+    private Dictionary<Guid, List<PhaseInfo>> _loadedPhases = new();
     private HashSet<Guid> _expanded = new();
     private HashSet<Guid> _refreshing = new();
-    private Dictionary<Guid, string> _editing = new();
-    private HashSet<Guid> _saving = new();
+    private HashSet<Guid> _applyingFixes = new();
+    private bool _loading = true;
+
+    // Product filtering
+    private Product? _selectedProduct;
+    private string _newProductName = string.Empty;
+
+    /// <summary>Sentinel value for the "Ungrouped" filter chip.</summary>
+    private static readonly Product _ungroupedPlaceholder = new() { Id = Guid.Empty, Name = "Ungrouped" };
+
+    // Project editing state
+    private Guid? _editingProject;
+    private string _editName = string.Empty;
+    private string _editSource = string.Empty;
+    private string _editOutputPath = string.Empty;
+
+    // Verify report caches
+    private readonly Dictionary<string, string> _verifyContentCache = new();
+    private readonly Dictionary<string, (string[] Files, DateTime FetchedAt)> _verifyFilesCache = new();
+    private Timer? _verifyTimer;
+
+    private static readonly DialogOptions _dialogOptions = new()
+    {
+        MaxWidth = MaxWidth.Large,
+        FullWidth = true,
+        CloseOnEscapeKey = true,
+        CloseButton = true
+    };
+
+    private static readonly JsonSerializerOptions _verifyJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
+    #endregion
+
+    #region Properties
+
+    /// <summary>
+    /// Projects filtered by the selected product. If no filter, returns all.
+    /// If "Ungrouped" is selected, returns projects with no product assignment.
+    /// </summary>
+    private IEnumerable<DecomposedProject> FilteredProjects
+    {
+        get
+        {
+            if (_selectedProduct is null)
+                return _projects;
+
+            if (_selectedProduct.Id == Guid.Empty) // Ungrouped sentinel
+                return _projects.Where(p => p.ProductId is null);
+
+            return _projects.Where(p => p.ProductId == _selectedProduct.Id);
+        }
+    }
+
+    #endregion
+
+    #region Constructor
 
     protected override async Task OnInitializedAsync()
     {
         await LoadProjectsAsync();
+        _loading = false;
     }
 
+    #endregion
+
+    #region Methods
+
+    // ── Data loading ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Loads projects sorted alphabetically with lightweight counts.
+    /// Does NOT load phase output content — that is deferred to card expansion.
+    /// </summary>
     private async Task LoadProjectsAsync()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
+
         _projects = await db.Projects
-            .Include(p => p.PhaseOutputs)
-            .Include(p => p.Items)
-            .OrderByDescending(p => p.DecomposedAt)
+            .Include(p => p.Product)
+            .OrderBy(p => p.Name)
+            .ToListAsync();
+
+        _products2 = await db.Products
+            .Include(p => p.Projects)
+            .OrderBy(p => p.Name)
+            .ToListAsync();
+
+        _phaseCounts = await db.PhaseOutputs
+            .GroupBy(p => p.ProjectId)
+            .Select(g => new { g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.Key, x => x.Count);
+
+        _itemCounts = await db.InventoryItems
+            .GroupBy(i => i.ProjectId)
+            .Select(g => new { g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.Key, x => x.Count);
+
+        await AttachOrphanedVerificationsAsync(db);
+    }
+
+    private int GetPhaseCount(Guid projectId) =>
+        _phaseCounts.GetValueOrDefault(projectId, 0);
+
+    private int GetItemCount(Guid projectId) =>
+        _itemCounts.GetValueOrDefault(projectId, 0);
+
+    /// <summary>
+    /// Loads phase output metadata (no content) for the given project.
+    /// </summary>
+    private async Task LoadPhaseMetadataAsync(Guid projectId)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        _loadedPhases[projectId] = await db.PhaseOutputs
+            .Where(p => p.ProjectId == projectId)
+            .OrderBy(p => p.PhaseNumber).ThenBy(p => p.Filename)
+            .Select(p => new PhaseInfo(p.Id, p.PhaseNumber, p.Filename, p.Content.Length / 1024, p.CreatedAt))
             .ToListAsync();
     }
 
-    private void ToggleExpand(Guid id)
+    /// <summary>
+    /// Scans projects with no <c>VerifiedAt</c> stamp. If verify JSON files exist on disk,
+    /// stamps the project with the most recent file's write time.
+    /// </summary>
+    private async Task AttachOrphanedVerificationsAsync(AppDbContext db)
     {
-        if (!_expanded.Add(id))
-            _expanded.Remove(id);
+        bool anyUpdated = false;
+
+        foreach (DecomposedProject project in _projects.Where(p => p.VerifiedAt is null))
+        {
+            string verifyDir = Path.Combine(project.OutputPath, "..", "..", "..", "Output", "Verification", project.Name);
+            if (!Directory.Exists(verifyDir)) continue;
+
+            string[] jsonFiles = Directory.GetFiles(verifyDir, "verify-*.json");
+            if (jsonFiles.Length == 0) continue;
+
+            DateTime mostRecent = jsonFiles
+                .Select(f => File.GetLastWriteTimeUtc(f))
+                .Max();
+
+            project.VerifiedAt = mostRecent;
+            anyUpdated = true;
+        }
+
+        if (anyUpdated)
+            await db.SaveChangesAsync();
     }
 
-    private void ToggleEdit(DecomposePhaseOutput phase)
+    // ── Card expansion ───────────────────────────────────────────────────────
+
+    private async Task ToggleExpandAsync(DecomposedProject project)
     {
-        if (_editing.ContainsKey(phase.Id))
-            _editing.Remove(phase.Id);
-        else
-            _editing[phase.Id] = phase.Content;
+        if (_expanded.Contains(project.Id))
+        {
+            _expanded.Remove(project.Id);
+            return;
+        }
+
+        _expanded.Add(project.Id);
+
+        // Load phase metadata on first expand
+        if (!_loadedPhases.ContainsKey(project.Id))
+            await LoadPhaseMetadataAsync(project.Id);
     }
 
-    private async Task SavePhaseOutputAsync(DecomposedProject project, DecomposePhaseOutput phase)
+    // ── File viewing dialogs ─────────────────────────────────────────────────
+
+    /// <summary>Opens a dialog to view a verification report file.</summary>
+    private async Task ViewVerifyFileAsync(string path)
     {
-        if (!_editing.TryGetValue(phase.Id, out string? newContent)) return;
-        _saving.Add(phase.Id);
+        string content = ReadFileContent(path);
+        string title = Path.GetFileName(path);
+
+        DialogParameters<ContentViewerDialog> parameters = new()
+        {
+            { x => x.Title, title },
+            { x => x.Content, content },
+            { x => x.AllowEdit, false }
+        };
+
+        await DialogService.ShowAsync<ContentViewerDialog>(title, parameters, _dialogOptions);
+    }
+
+    /// <summary>Opens a read-only dialog to view a decomposition phase.</summary>
+    private async Task ViewPhaseAsync(PhaseInfo phase)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        DecomposePhaseOutput? dbPhase = await db.PhaseOutputs.FindAsync(phase.Id);
+        if (dbPhase is null) return;
+
+        DialogParameters<ContentViewerDialog> parameters = new()
+        {
+            { x => x.Title, phase.Filename },
+            { x => x.Content, dbPhase.Content },
+            { x => x.AllowEdit, false }
+        };
+
+        await DialogService.ShowAsync<ContentViewerDialog>(phase.Filename, parameters, _dialogOptions);
+    }
+
+    /// <summary>
+    /// Opens a dialog to edit a decomposition phase. On save, persists to DB and disk,
+    /// then re-imports inventory if this is the Phase 6 file.
+    /// </summary>
+    private async Task EditPhaseAsync(DecomposedProject project, PhaseInfo phase)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        DecomposePhaseOutput? dbPhase = await db.PhaseOutputs.FindAsync(phase.Id);
+        if (dbPhase is null) return;
+
+        DialogParameters<ContentViewerDialog> parameters = new()
+        {
+            { x => x.Title, phase.Filename },
+            { x => x.Content, dbPhase.Content },
+            { x => x.AllowEdit, true }
+        };
+
+        IDialogReference dialog = await DialogService.ShowAsync<ContentViewerDialog>(
+            $"Edit — {phase.Filename}", parameters, _dialogOptions);
+
+        DialogResult? result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+
+        string newContent = result.Data as string ?? string.Empty;
+        if (string.Equals(newContent, dbPhase.Content, StringComparison.Ordinal)) return;
+
+        // Write to disk
+        if (!string.IsNullOrWhiteSpace(project.OutputPath) && Directory.Exists(project.OutputPath))
+        {
+            string filePath = Path.Combine(project.OutputPath, phase.Filename);
+            await File.WriteAllTextAsync(filePath, newContent);
+        }
+
+        // Update DB
+        dbPhase.Content = newContent;
+        await db.SaveChangesAsync();
+
+        // Refresh metadata for the card
+        await LoadPhaseMetadataAsync(project.Id);
+
+        // Re-import inventory if this is the Phase 6 file
+        if (phase.Filename.StartsWith("06-", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(project.OutputPath))
+        {
+            string phase6Path = Path.Combine(project.OutputPath, phase.Filename);
+            if (File.Exists(phase6Path))
+                await InventoryParser.ParseAndImportAsync(phase6Path, project.Name, project.Source, CancellationToken.None);
+        }
+    }
+
+    // ── Project editing ──────────────────────────────────────────────────────
+
+    private void StartProjectEdit(DecomposedProject project)
+    {
+        _editingProject = project.Id;
+        _editName = project.Name;
+        _editSource = project.Source;
+        _editOutputPath = project.OutputPath;
+    }
+
+    private void CancelProjectEdit() => _editingProject = null;
+
+    private async Task SaveProjectEditAsync(DecomposedProject project)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        DecomposedProject? dbProject = await db.Projects.FindAsync(project.Id);
+        if (dbProject is null) return;
+
+        dbProject.Name = _editName.Trim();
+        dbProject.Source = _editSource.Trim();
+        dbProject.OutputPath = _editOutputPath.Trim();
+        await db.SaveChangesAsync();
+
+        project.Name = dbProject.Name;
+        project.Source = dbProject.Source;
+        project.OutputPath = dbProject.OutputPath;
+
+        _editingProject = null;
+    }
+
+    // ── Verify ───────────────────────────────────────────────────────────────
+
+    private bool IsVerifyRunning(string projectName) =>
+        JobStore.AllVerifyJobs.Any(j =>
+            j.Options.ProjectName == projectName &&
+            j.Status is JobStatus.Pending or JobStatus.Running);
+
+    /// <summary>Returns the active or most recent verify job for a project.</summary>
+    private VerifyJob? GetVerifyJob(string projectName)
+    {
+        VerifyJob? running = JobStore.AllVerifyJobs.FirstOrDefault(j =>
+            j.Options.ProjectName == projectName &&
+            j.Status is JobStatus.Pending or JobStatus.Running);
+        if (running is not null) return running;
+
+        return JobStore.AllVerifyJobs
+            .Where(j => j.Options.ProjectName == projectName &&
+                        j.Status is JobStatus.Completed or JobStatus.Failed &&
+                        j.Documents.Count > 0)
+            .OrderByDescending(j => j.CompletedAt)
+            .FirstOrDefault();
+    }
+
+    private async Task StartVerifyAsync(DecomposedProject project)
+    {
+        _verifyContentCache.Clear();
+        _verifyFilesCache.Clear();
+        VerifyJob job = CreateVerifyJob(project);
+        JobStore.Add(job);
+        job.OnChanged += () => InvokeAsync(StateHasChanged);
+        await JobQueue.EnqueueAsync(job);
+        EnsureVerifyTimer();
+    }
+
+    private async Task StartSingleVerifyAsync(DecomposedProject project, string documentName)
+    {
+        _verifyContentCache.Clear();
+        _verifyFilesCache.Clear();
+        VerifyJob job = CreateVerifyJob(project);
+        job.Options.DocumentFilter = new List<string> { documentName };
+        JobStore.Add(job);
+        job.OnChanged += () => InvokeAsync(StateHasChanged);
+        await JobQueue.EnqueueAsync(job);
+        EnsureVerifyTimer();
+    }
+
+    private async Task StartSummaryOnlyAsync(DecomposedProject project)
+    {
+        _verifyContentCache.Clear();
+        _verifyFilesCache.Clear();
+        VerifyJob job = CreateVerifyJob(project);
+        job.Options.SummaryOnly = true;
+        JobStore.Add(job);
+        job.OnChanged += () => InvokeAsync(StateHasChanged);
+        await JobQueue.EnqueueAsync(job);
+        EnsureVerifyTimer();
+    }
+
+    private void EnsureVerifyTimer()
+    {
+        if (_verifyTimer is not null) return;
+        _verifyTimer = new Timer(_ =>
+        {
+            bool anyRunning = _projects.Any(p => IsVerifyRunning(p.Name));
+            if (!anyRunning)
+            {
+                _verifyTimer?.Dispose();
+                _verifyTimer = null;
+            }
+            InvokeAsync(StateHasChanged);
+        }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
+
+    private VerifyJob CreateVerifyJob(DecomposedProject project)
+    {
+        VerifyOptions options = new VerifyOptions
+        {
+            ProjectName = project.Name,
+            SourcePath = project.Source,
+            Orchestrator = LlmSettings.Orchestrator,
+            Model = LlmSettings.RegularModel,
+            OpenAiApiKey = LlmSettings.OpenAiApiKey,
+            OpenAiEndpoint = LlmSettings.OpenAiEndpoint,
+            MaxTurns = LlmSettings.MaxTurns,
+            MaxOutputTokens = LlmSettings.ThickMaxOutputTokens,
+            OutputRoot = Path.GetFullPath(Path.Combine(project.OutputPath, "..", "..", "..")),
+            TimeoutMinutes = LlmSettings.TimeoutMinutes,
+        };
+
+        return new VerifyJob { Options = options };
+    }
+
+    // ── Verify file helpers ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Cached verify file listing. Refreshes from disk at most every 3 seconds.
+    /// </summary>
+    private string[] GetVerifyFiles(string verifyDir)
+    {
+        if (_verifyFilesCache.TryGetValue(verifyDir, out (string[] Files, DateTime FetchedAt) entry)
+            && (DateTime.UtcNow - entry.FetchedAt).TotalSeconds < 3)
+            return entry.Files;
 
         try
         {
-            // Write to disk if the output path exists
-            if (!string.IsNullOrWhiteSpace(project.OutputPath) && Directory.Exists(project.OutputPath))
+            if (!Directory.Exists(verifyDir))
             {
-                string filePath = Path.Combine(project.OutputPath, phase.Filename);
-                await File.WriteAllTextAsync(filePath, newContent);
+                _verifyFilesCache[verifyDir] = (Array.Empty<string>(), DateTime.UtcNow);
+                return Array.Empty<string>();
             }
 
-            // Update DB record
-            await using (var db = await DbFactory.CreateDbContextAsync())
-            {
-                var dbPhase = await db.PhaseOutputs.FindAsync(phase.Id);
-                if (dbPhase is not null)
+            string[] files = Directory.GetFiles(verifyDir)
+                .Where(f =>
                 {
-                    dbPhase.Content = newContent;
-                    await db.SaveChangesAsync();
-                }
-            }
-
-            // Update in-memory so the view reflects the change immediately
-            phase.Content = newContent;
-            _editing.Remove(phase.Id);
-
-            // Re-import inventory if this is the Phase 6 file
-            if (phase.Filename.StartsWith("06-", StringComparison.OrdinalIgnoreCase) &&
-                !string.IsNullOrWhiteSpace(project.OutputPath))
-            {
-                string phase6Path = Path.Combine(project.OutputPath, phase.Filename);
-                if (File.Exists(phase6Path))
-                    await InventoryParser.ParseAndImportAsync(phase6Path, project.Name, project.Source, CancellationToken.None);
-            }
+                    string ext = Path.GetExtension(f);
+                    return ext.Equals(".json", StringComparison.OrdinalIgnoreCase)
+                        || ext.Equals(".md", StringComparison.OrdinalIgnoreCase);
+                })
+                .Where(f => Path.GetFileName(f).StartsWith("verify-", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            _verifyFilesCache[verifyDir] = (files, DateTime.UtcNow);
+            return files;
         }
-        finally
+        catch
         {
-            _saving.Remove(phase.Id);
+            return Array.Empty<string>();
         }
     }
+
+    /// <summary>
+    /// Reads and caches verify file content. JSON files are deserialized and rendered
+    /// to markdown via <see cref="VerifyReportRenderer"/>.
+    /// </summary>
+    private string ReadFileContent(string path)
+    {
+        if (_verifyContentCache.TryGetValue(path, out string? cached))
+            return cached;
+
+        try
+        {
+            string raw = File.ReadAllText(path);
+            string content;
+
+            if (Path.GetExtension(path).Equals(".json", StringComparison.OrdinalIgnoreCase))
+            {
+                VerifyReport? report = JsonSerializer.Deserialize<VerifyReport>(raw, _verifyJsonOptions);
+                content = report is not null
+                    ? VerifyReportRenderer.RenderReport(report)
+                    : $"*Failed to deserialize {Path.GetFileName(path)}*";
+            }
+            else
+            {
+                content = raw;
+            }
+
+            _verifyContentCache[path] = content;
+            return content;
+        }
+        catch
+        {
+            return $"*Error reading {Path.GetFileName(path)}*";
+        }
+    }
+
+    // ── Refresh ──────────────────────────────────────────────────────────────
 
     private async Task RefreshProjectFilesAsync(DecomposedProject project)
     {
         _refreshing.Add(project.Id);
+        _verifyContentCache.Clear();
+        _verifyFilesCache.Clear();
+        _loadedPhases.Remove(project.Id);
         StateHasChanged();
 
         try
@@ -239,7 +827,6 @@ else
 
             string[] files = Directory.GetFiles(project.OutputPath, "*.md");
 
-            // Re-sync phase outputs
             await using (var db = await DbFactory.CreateDbContextAsync())
             {
                 db.PhaseOutputs.RemoveRange(db.PhaseOutputs.Where(o => o.ProjectId == project.Id));
@@ -255,12 +842,12 @@ else
                     string content = await File.ReadAllTextAsync(file);
                     db.PhaseOutputs.Add(new DecomposePhaseOutput
                     {
-                        Id          = Guid.NewGuid(),
-                        ProjectId   = project.Id,
+                        Id = Guid.NewGuid(),
+                        ProjectId = project.Id,
                         PhaseNumber = phaseNumber,
-                        Filename    = filename,
-                        Content     = content,
-                        CreatedAt   = DateTime.UtcNow
+                        Filename = filename,
+                        Content = content,
+                        CreatedAt = DateTime.UtcNow
                     });
                 }
                 await db.SaveChangesAsync();
@@ -273,6 +860,10 @@ else
                 await InventoryParser.ParseAndImportAsync(phase6File, project.Name, project.Source, CancellationToken.None);
 
             await LoadProjectsAsync();
+
+            // Reload phase metadata if this card is expanded
+            if (_expanded.Contains(project.Id))
+                await LoadPhaseMetadataAsync(project.Id);
         }
         finally
         {
@@ -280,4 +871,239 @@ else
             StateHasChanged();
         }
     }
+
+    // ── Product fix dialog ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Opens the ProductFixDialog for all projects in the selected product.
+    /// On close, refreshes caches and phase metadata.
+    /// </summary>
+    private async Task OpenProductFixDialogAsync(Product product)
+    {
+        List<DecomposedProject> productProjects = _projects
+            .Where(p => p.ProductId == product.Id)
+            .ToList();
+
+        if (productProjects.Count == 0) return;
+
+        DialogParameters<ProductFixDialog> parameters = new()
+        {
+            { x => x.ProductName, product.Name },
+            { x => x.Projects, productProjects },
+            { x => x.DbFactory, DbFactory }
+        };
+
+        DialogOptions options = new()
+        {
+            MaxWidth = MaxWidth.Medium,
+            FullWidth = true,
+            CloseOnEscapeKey = true,
+            CloseButton = true
+        };
+
+        IDialogReference dialog = await DialogService.ShowAsync<ProductFixDialog>(
+            $"Fix — {product.Name}", parameters, options);
+
+        await dialog.Result;
+
+        // Refresh caches after fixes applied
+        _verifyContentCache.Clear();
+        _verifyFilesCache.Clear();
+
+        foreach (DecomposedProject proj in productProjects)
+        {
+            if (_expanded.Contains(proj.Id))
+                await LoadPhaseMetadataAsync(proj.Id);
+        }
+    }
+
+    // ── Product management ───────────────────────────────────────────────────
+
+    /// <summary>Creates a new product and refreshes the product list.</summary>
+    private async Task CreateProductAsync()
+    {
+        string name = _newProductName.Trim();
+        if (string.IsNullOrWhiteSpace(name)) return;
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            if (await db.Products.AnyAsync(p => p.Name == name))
+                return;
+
+            db.Products.Add(new Product
+            {
+                Id = Guid.NewGuid(),
+                Name = name,
+                CreatedAt = DateTime.UtcNow
+            });
+            await db.SaveChangesAsync();
+
+            _newProductName = string.Empty;
+            await LoadProjectsAsync();
+        }
+        catch
+        {
+            // Silently ignored — user can retry
+        }
+    }
+
+    /// <summary>Assigns or removes a product for a project.</summary>
+    private async Task AssignProductAsync(DecomposedProject project, Guid? productId)
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            DecomposedProject? dbProject = await db.Projects.FindAsync(project.Id);
+            if (dbProject is null) return;
+
+            dbProject.ProductId = productId;
+            await db.SaveChangesAsync();
+
+            project.ProductId = productId;
+            project.Product = productId.HasValue
+                ? _products2.FirstOrDefault(p => p.Id == productId.Value)
+                : null;
+
+            // Refresh product counts
+            _products2 = await db.Products
+                .Include(p => p.Projects)
+                .OrderBy(p => p.Name)
+                .ToListAsync();
+        }
+        catch
+        {
+            // Silently ignored — user can retry
+        }
+    }
+
+    // ── Fix application ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Reads all verify JSON files for a project, finds failed claims with fix instructions,
+    /// applies the Find/Replace pairs to the corresponding decomposition phase output,
+    /// stamps FixedAt on each fixed claim, and writes updated files back to disk.
+    /// </summary>
+    private async Task ApplyVerificationFixesAsync(DecomposedProject project)
+    {
+        _applyingFixes.Add(project.Id);
+        StateHasChanged();
+
+        try
+        {
+            string verifyDir = Path.Combine(project.OutputPath, "..", "..", "..", "Output", "Verification", project.Name);
+            if (!Directory.Exists(verifyDir)) return;
+
+            string[] verifyFiles = Directory.GetFiles(verifyDir, "verify-*.json");
+            if (verifyFiles.Length == 0) return;
+
+            int totalApplied = 0;
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            foreach (string verifyPath in verifyFiles)
+            {
+                try
+                {
+                    string json = await File.ReadAllTextAsync(verifyPath);
+                    VerifyReport? report = JsonSerializer.Deserialize<VerifyReport>(json, _verifyJsonOptions);
+                    if (report?.Claims is null || report.Claims.Count == 0) continue;
+
+                    // Derive target document: verify-01-foo.json → 01-foo.md
+                    string verifyFileName = Path.GetFileNameWithoutExtension(verifyPath);
+                    string docName = verifyFileName.StartsWith("verify-", StringComparison.OrdinalIgnoreCase)
+                        ? verifyFileName[7..] + ".md"
+                        : verifyFileName + ".md";
+
+                    // Find claims that failed, have a fix, and haven't been fixed yet
+                    List<VerifyClaim> fixableClaims = report.Claims
+                        .Where(c => c.Status is "FAIL" or "FABRICATED" &&
+                                    c.Fix is not null &&
+                                    !string.IsNullOrWhiteSpace(c.Fix.Find) &&
+                                    !string.IsNullOrWhiteSpace(c.Fix.Replace) &&
+                                    c.FixedAt is null)
+                        .ToList();
+
+                    if (fixableClaims.Count == 0) continue;
+
+                    // Load the target phase output from DB
+                    DecomposePhaseOutput? phase = await db.PhaseOutputs
+                        .FirstOrDefaultAsync(p => p.ProjectId == project.Id &&
+                                                  p.Filename == docName);
+                    if (phase is null) continue;
+
+                    string content = phase.Content;
+                    bool anyApplied = false;
+
+                    foreach (VerifyClaim claim in fixableClaims)
+                    {
+                        if (!content.Contains(claim.Fix!.Find, StringComparison.Ordinal))
+                            continue;
+
+                        content = content.Replace(claim.Fix.Find, claim.Fix.Replace, StringComparison.Ordinal);
+                        claim.FixedAt = DateTime.UtcNow;
+                        anyApplied = true;
+                        totalApplied++;
+                    }
+
+                    if (!anyApplied) continue;
+
+                    // Update DB
+                    phase.Content = content;
+
+                    // Write updated decomposition file to disk
+                    string diskPath = Path.Combine(project.OutputPath, docName);
+                    if (File.Exists(diskPath))
+                        await File.WriteAllTextAsync(diskPath, content);
+
+                    // Write updated verify JSON back with FixedAt stamps
+                    string updatedJson = JsonSerializer.Serialize(report, new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true,
+                        WriteIndented = true,
+                        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+                    });
+                    await File.WriteAllTextAsync(verifyPath, updatedJson);
+                }
+                catch
+                {
+                    // Skip files that can't be processed — don't abort the whole batch
+                    continue;
+                }
+            }
+
+            await db.SaveChangesAsync();
+
+            // Clear caches so UI picks up fresh data
+            _verifyContentCache.Clear();
+            _verifyFilesCache.Clear();
+
+            // Refresh phase metadata if card is expanded
+            if (_expanded.Contains(project.Id))
+                await LoadPhaseMetadataAsync(project.Id);
+        }
+        finally
+        {
+            _applyingFixes.Remove(project.Id);
+            StateHasChanged();
+        }
+    }
+
+    #endregion
+
+    #region IDisposable
+
+    public void Dispose()
+    {
+        _verifyTimer?.Dispose();
+        _verifyTimer = null;
+    }
+
+    #endregion
+}
+
+@code {
+    /// <summary>Lightweight projection of phase output metadata — no content loaded.</summary>
+    private record PhaseInfo(Guid Id, int PhaseNumber, string Filename, int SizeKb, DateTime CreatedAt);
 }
