@@ -40,8 +40,10 @@ flowchart LR
 ## Prerequisites
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
-- [`claude` CLI](https://docs.anthropic.com/claude/docs/claude-code) — installed and authenticated (required for the default Claude Agent backend)
+- [`claude` CLI](https://docs.anthropic.com/claude/docs/claude-code) — installed and authenticated (required for the default `ClaudeCode` backend)
 - Git — for decomposing remote repositories
+
+For alternative backends: [GitHub CLI](https://cli.github.com) (`gh auth login`) for `CopilotCli`, or an OpenAI-compatible API key for `OpenAI`/`Ollama`.
 
 Verify your setup:
 ```bash
@@ -78,6 +80,7 @@ Usage: otx <command> [options]
 
 Commands:
   decompose    Decompose a codebase into a language-agnostic specification
+  verify       Verify decomposition accuracy against the original source code
   compose      Compose a new system design from inventory items
   implement    Generate working code from a compose output spec file
   inventory    Browse inventory items extracted from decomposed projects
@@ -149,7 +152,7 @@ otx decompose ./my-project \
 | `--project, -p` | auto-detected | Project name used in output paths |
 | `--start-phase` | `0` | Phase to start from (0 = fresh run) |
 | `--end-phase` | run all | Last phase to run, inclusive |
-| `--orchestrator` | from settings | `ClaudeCode` \| `OpenAI` \| `Ollama` |
+| `--orchestrator` | from settings | `ClaudeCode` \| `CopilotCli` \| `OpenAI` \| `Ollama` |
 | `--api-key` | `OPENAI_API_KEY` env | OpenAI API key |
 | `--endpoint` | from settings | Custom OpenAI-compatible base URL |
 | `--thick-model` | from settings | Model for heavy phases |
@@ -188,6 +191,64 @@ otx decompose ./trading-engine \
 ```
 
 Hints are injected verbatim into every phase prompt. Keep them factual and concise.
+
+---
+
+## Verifying a Decomposition
+
+The `verify` command audits each decomposition output document against the original source code. The AI reads the actual files and checks every factual claim in the document — class names, method signatures, file paths, design decisions — producing a structured JSON report for each document.
+
+```bash
+# Verify a decomposition against its original source
+otx verify my-project ./path/to/source
+
+# With a specific model and hints
+otx verify my-project ./path/to/source \
+  --model claude-opus-4-5-20251001 \
+  --hints "Focus on the data layer and async patterns."
+
+# Using a different backend
+otx verify my-project ./path/to/source \
+  --orchestrator OpenAI \
+  --api-key sk-... \
+  --model gpt-4o
+```
+
+**`otx verify` options:**
+
+| Option | Default | Description |
+|---|---|---|
+| `project` | *(required)* | Project name — must match the decomposition output directory |
+| `source` | *(required)* | Path to the original source code directory |
+| `--orchestrator` | from settings | `ClaudeCode` \| `CopilotCli` \| `OpenAI` \| `Ollama` |
+| `--model` | regular model | Model override |
+| `--api-key` | `OPENAI_API_KEY` env | OpenAI API key |
+| `--endpoint` | from settings | Custom OpenAI-compatible base URL |
+| `--max-turns` | `30` | Max agent turns per document |
+| `--max-tokens` | `32768` | Max output tokens per document |
+| `--hints` | *(none)* | Free-text hints to focus the audit on specific concerns |
+
+### Verification reports
+
+Each document in `Output/Decomposition/<project>/` gets its own JSON report saved to `Output/Verification/<project>/verify-<document-name>.json`. Every audited claim is classified as:
+
+| Status | Severity | Meaning |
+|---|---|---|
+| `PASS` | — | Claim is correct |
+| `FAIL` | `MINOR` | Small inaccuracy (wrong name, slightly wrong description) |
+| `FAIL` | `MAJOR` | Significant error (wrong behaviour, missing key detail) |
+| `FAIL` | `FABRICATED` | Claim refers to something that does not exist in the source |
+
+FAIL claims include a `finding`, `actual` value, `evidence` (file path or line), and an optional `fix` with exact find/replace text to correct the decomposition document.
+
+### Applying fixes via the web app
+
+In the **Projects** screen, projects can be grouped into **Products**. Once you have verify reports for a product's projects, the **Fix \<Product\>** button opens the *Apply Fixes* dialog, which:
+
+1. Scans all verify JSON files across every project in the product
+2. Lists all pending FAIL claims that have machine-applicable fixes
+3. Applies each fix as an exact text replacement in the decomposition document (both the database and the file on disk)
+4. Stamps a `fixedAt` timestamp on each applied claim so it won't appear again
 
 ---
 
@@ -293,7 +354,7 @@ otx compose --output my-new-system --items "..." \
 | `--description` | | What the target system should be and do |
 | `--environment` | | Where it runs (cloud, browser, embedded, …) |
 | `--technology` | | Tech stack / language / framework |
-| `--orchestrator` | from settings | `ClaudeCode` \| `OpenAI` \| `Ollama` |
+| `--orchestrator` | from settings | `ClaudeCode` \| `CopilotCli` \| `OpenAI` \| `Ollama` |
 | `--api-key` | `OPENAI_API_KEY` env | OpenAI API key |
 | `--endpoint` | from settings | Custom OpenAI-compatible base URL |
 | `--model` | from settings | Model override |
@@ -374,7 +435,7 @@ otx implement path/to/spec.md \
 | `spec` | *(required)* | Path to the compose output spec file |
 | `--output, -o` | `Output/Implementation/<project>` | Output directory for generated code |
 | `--project, -p` | inferred from spec path | Project name |
-| `--orchestrator` | from settings | `ClaudeCode` \| `OpenAI` \| `Ollama` |
+| `--orchestrator` | from settings | `ClaudeCode` \| `CopilotCli` \| `OpenAI` \| `Ollama` |
 | `--api-key` | `OPENAI_API_KEY` env | OpenAI API key |
 | `--endpoint` | from settings | Custom OpenAI-compatible base URL |
 | `--model` | thick model from settings | Model override |
@@ -398,6 +459,9 @@ otx settings \
   --regular-model gpt-4o-mini \
   --thin-model gpt-4o-mini
 
+# Or use GitHub Copilot CLI (model selection is optional — uses Copilot default if omitted)
+otx settings --orchestrator CopilotCli --regular-model claude-sonnet-4-5
+
 # Set a custom endpoint (Azure, LM Studio, etc.)
 otx settings --endpoint https://my-resource.openai.azure.com/...
 
@@ -415,7 +479,7 @@ otx settings --user-ethos ""
 
 | Option | Description |
 |---|---|
-| `--orchestrator` | Default engine (`ClaudeCode` \| `OpenAI` \| `Ollama`) |
+| `--orchestrator` | Default engine (`ClaudeCode` \| `CopilotCli` \| `OpenAI` \| `Ollama`) |
 | `--endpoint` | Default OpenAI-compatible base URL |
 | `--thick-model` | Default model for heavy phases |
 | `--regular-model` | Default model for normal phases |
@@ -450,6 +514,7 @@ otx jobs --id <guid>
 | Backend | Description |
 |---|---|
 | **ClaudeCode** | Invokes the `claude` CLI as a subprocess. The agent uses its own file-reading tools to explore the source directory — no manual file packing required. Requires `claude` CLI installed and authenticated. Auto-maps weight tiers to Opus / Sonnet / Haiku. |
+| **CopilotCli** | Invokes the GitHub Copilot CLI via the `GitHub.Copilot.SDK`. Uses your existing GitHub login (`GH_TOKEN` or `GITHUB_TOKEN` env var, or interactive `gh auth login`). Supports model selection via `--model`. No weight-tier auto-mapping — specify the model explicitly. |
 | **OpenAI** | Calls any OpenAI-compatible HTTP API. Works with OpenAI, Azure AI Foundry, LM Studio, vLLM, and others. Requires a base URL and API key. |
 | **Ollama** | Calls a local Ollama instance via its OpenAI-compatible API (`http://localhost:11434`). Requires Ollama running locally with your chosen models pulled. |
 
@@ -467,6 +532,23 @@ No further configuration is required. Model weight tiers are automatically mappe
 - Thick phases → Claude Opus
 - Normal phases → Claude Sonnet
 - Thin phases → Claude Haiku
+
+### Setting up the Copilot CLI backend
+
+Ensure you have a GitHub Copilot subscription and the GitHub CLI installed:
+
+```bash
+# Install GitHub CLI (if not already installed)
+# https://cli.github.com
+
+# Authenticate with GitHub
+gh auth login
+
+# Optional: set a token explicitly
+export GH_TOKEN=ghp_...
+```
+
+No further configuration is needed. Specify the model with `--model` or pass it via `otx settings --regular-model <model-name>`. The Copilot backend does not auto-map weight tiers — if you don't supply a model it uses the Copilot default for your account.
 
 ### Setting up the OpenAI-compatible backend
 
@@ -506,6 +588,7 @@ Configure the model names via `otx settings` or the backend fields in the web ap
 | `Output/Decomposition/<project>/07-ethos.md` | Style fingerprint and coding standards guide |
 | `Output/Decomposition/<project>/inventory.json` | Per-project inventory export |
 | `Output/Decomposition/<project>/job.json` | Job state (used for resume-on-failure) |
+| `Output/Verification/<project>/verify-<document>.json` | Structured verification report for one decomposition document |
 | `Output/Composition/<name>/compose-output.md` | Compose run output |
 | `Output/Implementation/<project>/` | Implemented code files |
 | `DB/opentransmute.db` | SQLite database (projects + inventory items) |
