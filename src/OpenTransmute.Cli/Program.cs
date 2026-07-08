@@ -9,9 +9,9 @@ using OpenTransmute.Cli.Commands;
 using OpenTransmute.Data;
 
 // DB lives next to the CWD — same default as the Blazor app so both can share data
-var dbDir  = Path.Combine(Directory.GetCurrentDirectory(), "DB");
+string dbDir = Path.Combine(Directory.GetCurrentDirectory(), "DB");
 Directory.CreateDirectory(dbDir);
-var dbPath = Path.Combine(dbDir, "opentransmute.db");
+string dbPath = Path.Combine(dbDir, "opentransmute.db");
 
 // Build the host — JobRunner starts as a BackgroundService and waits for queued work
 var host = Host.CreateDefaultBuilder()
@@ -34,7 +34,7 @@ await host.StartAsync();
 // Load settings from the shared database (same UserSettings table the Blazor UI uses)
 var settingsStore = new CliSettingsStore(
     host.Services.GetRequiredService<IDbContextFactory<AppDbContext>>());
-var settings = settingsStore.Load();
+CliSettings settings = settingsStore.Load();
 
 // Build command tree
 var root = new RootCommand("OpenTransmute CLI — decompose codebases and compose new systems with AI");
@@ -42,6 +42,7 @@ root.Subcommands.Add(DecomposeCommand.Build(host.Services, settings));
 root.Subcommands.Add(ComposeCommand.Build(host.Services, settings));
 root.Subcommands.Add(ImplementCommand.Build(host.Services, settings));
 root.Subcommands.Add(VerifyCommand.Build(host.Services, settings));
+root.Subcommands.Add(FixCommand.Build(host.Services));
 root.Subcommands.Add(InventoryCommand.Build(host.Services));
 root.Subcommands.Add(JobsCommand.Build(host.Services));
 root.Subcommands.Add(SettingsCommand.Build(settings, settingsStore));

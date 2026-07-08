@@ -6,8 +6,13 @@ using OpenTransmute.Models;
 
 namespace OpenTransmute.Cli.Commands;
 
+/// <summary>
+/// <c>inventory</c> command — browses the inventory items extracted from decomposed projects,
+/// reading directly from the local database.
+/// </summary>
 internal static class InventoryCommand
 {
+    /// <summary>Builds the <c>inventory</c> command, wiring its options and run action.</summary>
     internal static Command Build(IServiceProvider sp)
     {
         var cmd = new Command("inventory", "Browse inventory items extracted from decomposed projects");
@@ -24,14 +29,14 @@ internal static class InventoryCommand
 
         cmd.SetAction(async (parseResult, ct) =>
         {
-            var search   = parseResult.GetValue(searchOpt);
-            var category = parseResult.GetValue(categoryOpt);
-            var project  = parseResult.GetValue(projectOpt);
-            var verbose  = parseResult.GetValue(verboseOpt);
+            string? search = parseResult.GetValue(searchOpt);
+            InventoryCategory? category = parseResult.GetValue(categoryOpt);
+            string? project = parseResult.GetValue(projectOpt);
+            bool verbose = parseResult.GetValue(verboseOpt);
 
             var dbFactory = sp.GetRequiredService<IDbContextFactory<AppDbContext>>();
             await using var db = await dbFactory.CreateDbContextAsync(ct);
-            var items = await db.InventoryItems.Include(i => i.Project).ToListAsync(ct);
+            List<InventoryItem> items = await db.InventoryItems.Include(i => i.Project).ToListAsync(ct);
 
             if (category.HasValue)
                 items = items.Where(i => i.Category == category.Value).ToList();

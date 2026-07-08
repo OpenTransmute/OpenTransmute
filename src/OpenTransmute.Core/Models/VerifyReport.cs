@@ -52,21 +52,27 @@ public class VerifyReportHeader
 {
     #region Properties
 
+    /// <summary>Total number of claims audited.</summary>
     [JsonPropertyName("claimsAudited")]
     public int ClaimsAudited { get; set; }
 
+    /// <summary>Number of claims that passed verification.</summary>
     [JsonPropertyName("passed")]
     public int Passed { get; set; }
 
+    /// <summary>Number of failing claims with MINOR severity.</summary>
     [JsonPropertyName("minor")]
     public int Minor { get; set; }
 
+    /// <summary>Number of failing claims with MAJOR severity.</summary>
     [JsonPropertyName("major")]
     public int Major { get; set; }
 
+    /// <summary>Number of failing claims flagged as FABRICATED.</summary>
     [JsonPropertyName("fabricated")]
     public int Fabricated { get; set; }
 
+    /// <summary>Free-text overall assessment written by the LLM.</summary>
     [JsonPropertyName("overallAssessment")]
     public string OverallAssessment { get; set; } = string.Empty;
 
@@ -91,6 +97,7 @@ public class VerifyClaim
 {
     #region Properties
 
+    /// <summary>Sequential claim number within the report.</summary>
     [JsonPropertyName("id")]
     public int Id { get; set; }
 

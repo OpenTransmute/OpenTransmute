@@ -46,6 +46,10 @@ public class GitSourceFetcher(ILogger<GitSourceFetcher> logger) : ISourceFetcher
         }, ct);
     }
 
+    /// <summary>
+    /// Derives a project name from a git URL by taking the last path segment and stripping a
+    /// trailing <c>.git</c> (e.g. <c>https://host/org/repo.git</c> → <c>repo</c>).
+    /// </summary>
     private static string InferRepoName(string url)
     {
         string last = url.TrimEnd('/').Split('/').LastOrDefault() ?? "repo";

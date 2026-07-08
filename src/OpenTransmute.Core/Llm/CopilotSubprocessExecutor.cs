@@ -1,8 +1,8 @@
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 using Microsoft.Extensions.AI;
-using Rpc = GitHub.Copilot.SDK.Rpc;
+using Rpc = GitHub.Copilot.Rpc;
 using OpenTransmute.Models;
 
 namespace OpenTransmute.Llm;
@@ -23,6 +23,26 @@ public sealed class CopilotSubprocessExecutor : ILlmExecutor
     #region Members
 
     private readonly ILogger<CopilotSubprocessExecutor> _logger;
+
+    // Built-in Copilot CLI tools that turn a single-document decompose/compose/implement phase
+    // into a fleet of background sub-agents. These come from BuiltInTools.Isolated and exist for
+    // interactive multi-agent orchestration — exactly the wrong behavior here. Left enabled, the
+    // model spawns `task` sub-agents, then burns the whole run polling them with `read_agent`
+    // instead of reading files and emitting one document (observed: phase-03-01 spent 26 turns
+    // orchestrating five background agents, produced ~1.5KB, then died on a server stream error).
+    // There is no phase in which sub-agent orchestration is desirable, so the suite is excluded
+    // unconditionally. `ask_user` is included because a non-interactive run has no one to answer
+    // it — the model would stall until the idle timeout.
+    private static readonly IList<string> ExcludedBuiltInTools = new List<string>
+    {
+        "task",          // spawn a background sub-agent — the direct culprit
+        "read_agent",    // poll a sub-agent for results
+        "write_agent",   // send input to a sub-agent
+        "list_agents",   // enumerate running sub-agents
+        "send_inbox",    // inter-agent messaging
+        "context_board", // shared sub-agent context board
+        "ask_user"       // interactive prompt — nothing answers it in a headless run
+    };
 
     // Appended to the user prompt when the model must write output to stdout only.
     // Suppressed when the model has a direct file-write target (OutputFilePath) or Implement mode.
@@ -118,11 +138,12 @@ public sealed class CopilotSubprocessExecutor : ILlmExecutor
             string cwd = ctx.WorkingDirectory ?? Directory.GetCurrentDirectory();
             int idleTimeoutSec = Math.Max(30, (int)ctx.Timeout.TotalSeconds);
 
+            // SDK 1.0.4: UseStdio/AutoStart/Cwd were removed. Mode selects the Copilot CLI
+            // transport, WorkingDirectory sets the file-tool root, and we start explicitly below.
             client = new CopilotClient(new CopilotClientOptions
             {
-                UseStdio  = true,
-                AutoStart = true,
-                Cwd       = cwd,
+                Mode                      = CopilotClientMode.CopilotCli,
+                WorkingDirectory          = cwd,
                 SessionIdleTimeoutSeconds = idleTimeoutSec,
             });
 
@@ -174,7 +195,7 @@ public sealed class CopilotSubprocessExecutor : ILlmExecutor
                             "content to disk. Pass the raw Markdown content — no escaping or wrapping needed."
                     });
 
-                config.Tools = new List<AIFunction> { appendTool };
+                config.Tools = new List<AIFunctionDeclaration> { appendTool };
                 _logger.LogInformation("[COPILOT] AppendResults tool registered on config. Temp file: {Path}", appendResultsPath);
             }
 
@@ -184,7 +205,8 @@ public sealed class CopilotSubprocessExecutor : ILlmExecutor
             streamLog.WriteHeader(ctx,
                 ("FileToolsRoot", ctx.FileToolsRoot),
                 ("AppendResultsPath", appendResultsPath),
-                ("IdleTimeoutSec", idleTimeoutSec.ToString()));
+                ("IdleTimeoutSec", idleTimeoutSec.ToString()),
+                ("ExcludedTools", string.Join(", ", ExcludedBuiltInTools)));
 
             // Track last assistant message content for the final output.
             string? lastMessageContent = null;
@@ -193,21 +215,18 @@ public sealed class CopilotSubprocessExecutor : ILlmExecutor
             // Chars received in the CURRENT turn — reset on each TurnStart.
             int turnDeltaLength = 0;
 
-            // Model retry detection — abort the CLI's internal retry (which restarts from
-            // scratch) and send a continuation prompt with the accumulated partial output.
-            bool modelRetryDetected = false;
-            string? partialBeforeRetry = null;
+            // model_retry counter — logging only. The SDK owns retry; we don't intercept it.
             int modelRetryCount = 0;
-            int continuationAttempts = 0;
-            const int MaxContinuationAttempts = 2;
 
-            subscription = session.On(evt =>
+            // SDK 1.0.4: On is generic with no non-generic overload, so the base event
+            // type must be named explicitly to subscribe to every session event.
+            subscription = session.On<SessionEvent>(evt =>
             {
                 switch (evt)
                 {
                     case AssistantMessageDeltaEvent delta:
                         string chunk = delta.Data.DeltaContent ?? string.Empty;
-                        if (chunk.Length == 0 || modelRetryDetected)
+                        if (chunk.Length == 0)
                             break;
 
                         deltaAccumulator.Append(chunk);
@@ -234,6 +253,10 @@ public sealed class CopilotSubprocessExecutor : ILlmExecutor
                         break;
 
                     case AssistantTurnStartEvent turnStart:
+                        // Separate this message from the previous one so narration never glues
+                        // onto the final document title (which once truncated 40% of an output).
+                        if (deltaAccumulator.Length > 0 && deltaAccumulator[^1] != '\n')
+                            deltaAccumulator.Append('\n');
                         streamLog.WriteLine($"\n\n--- TURN {turnStart.Data?.TurnId ?? "?"} (prev turn deltas={turnDeltaLength}) ---");
                         turnDeltaLength = 0;
                         break;
@@ -259,83 +282,83 @@ public sealed class CopilotSubprocessExecutor : ILlmExecutor
                     // ── Usage / token events ─────────────────────────────────────
 
                     case AssistantUsageEvent usage:
-                        var u = usage.Data;
+                        var usageData = usage.Data;
                         streamLog.WriteLine(
-                            $"\n  [USAGE] model={u?.Model} in={u?.InputTokens} out={u?.OutputTokens} " +
-                            $"cacheR={u?.CacheReadTokens} cacheW={u?.CacheWriteTokens} " +
-                            $"cost={u?.Cost} duration={u?.Duration}ms latency={u?.InterTokenLatencyMs}ms");
+                            $"\n  [USAGE] model={usageData?.Model} in={usageData?.InputTokens} out={usageData?.OutputTokens} " +
+                            $"cacheR={usageData?.CacheReadTokens} cacheW={usageData?.CacheWriteTokens} " +
+                            $"duration={usageData?.Duration}ms latency={usageData?.InterTokenLatency}ms");
                         break;
 
                     case SessionUsageInfoEvent usageInfo:
-                        var ui = usageInfo.Data;
+                        var usageInfoData = usageInfo.Data;
                         streamLog.WriteLine(
-                            $"\n  [USAGE INFO] tokens={ui?.CurrentTokens}/{ui?.TokenLimit} " +
-                            $"system={ui?.SystemTokens} conversation={ui?.ConversationTokens} " +
-                            $"toolDefs={ui?.ToolDefinitionsTokens} messages={ui?.MessagesLength} initial={ui?.IsInitial}");
+                            $"\n  [USAGE INFO] tokens={usageInfoData?.CurrentTokens}/{usageInfoData?.TokenLimit} " +
+                            $"system={usageInfoData?.SystemTokens} conversation={usageInfoData?.ConversationTokens} " +
+                            $"toolDefs={usageInfoData?.ToolDefinitionsTokens} messages={usageInfoData?.MessagesLength} initial={usageInfoData?.IsInitial}");
                         break;
 
                     // ── Session lifecycle ─────────────────────────────────────────
 
                     case SessionStartEvent sessionStart:
-                        var ss = sessionStart.Data;
+                        var startData = sessionStart.Data;
                         streamLog.WriteLine(
-                            $"\n  [SESSION START] id={ss?.SessionId} model={ss?.SelectedModel} " +
-                            $"copilot={ss?.CopilotVersion} reasoning={ss?.ReasoningEffort}");
+                            $"\n  [SESSION START] id={startData?.SessionId} model={startData?.SelectedModel} " +
+                            $"copilot={startData?.CopilotVersion} reasoning={startData?.ReasoningEffort} tier={startData?.ContextTier}");
                         break;
 
                     case SessionShutdownEvent shutdown:
-                        var sd = shutdown.Data;
+                        var shutdownData = shutdown.Data;
                         streamLog.WriteLine(
-                            $"\n  [SESSION SHUTDOWN] type={sd?.ShutdownType} error={sd?.ErrorReason} " +
-                            $"model={sd?.CurrentModel} tokens={sd?.CurrentTokens} " +
-                            $"system={sd?.SystemTokens} conversation={sd?.ConversationTokens} " +
-                            $"toolDefs={sd?.ToolDefinitionsTokens} apiDuration={sd?.TotalApiDurationMs}ms");
+                            $"\n  [SESSION SHUTDOWN] type={shutdownData?.ShutdownType} error={shutdownData?.ErrorReason} " +
+                            $"model={shutdownData?.CurrentModel} tokens={shutdownData?.CurrentTokens} " +
+                            $"system={shutdownData?.SystemTokens} conversation={shutdownData?.ConversationTokens} " +
+                            $"toolDefs={shutdownData?.ToolDefinitionsTokens} apiDuration={shutdownData?.TotalApiDuration.TotalMilliseconds}ms");
                         break;
 
                     // SessionLifecycleEvent is not a SessionEvent subtype — cannot be matched here.
 
                     case SessionModelChangeEvent modelChange:
-                        var mc = modelChange.Data;
+                        var modelChangeData = modelChange.Data;
                         streamLog.WriteLine(
-                            $"\n  [MODEL CHANGE] {mc?.PreviousModel} → {mc?.NewModel} cause={mc?.Cause} " +
-                            $"reasoning={mc?.PreviousReasoningEffort} → {mc?.ReasoningEffort}");
+                            $"\n  [MODEL CHANGE] {modelChangeData?.PreviousModel} → {modelChangeData?.NewModel} cause={modelChangeData?.Cause} " +
+                            $"reasoning={modelChangeData?.PreviousReasoningEffort} → {modelChangeData?.ReasoningEffort} tier={modelChangeData?.ContextTier}");
                         break;
 
                     // ── Truncation / compaction ──────────────────────────────────
 
                     case SessionTruncationEvent truncation:
-                        var tr = truncation.Data;
+                        var truncationData = truncation.Data;
                         streamLog.WriteLine(
-                            $"\n  [TRUNCATION] by={tr?.PerformedBy} limit={tr?.TokenLimit} " +
-                            $"pre={tr?.PreTruncationTokensInMessages} post={tr?.PostTruncationTokensInMessages} " +
-                            $"removed={tr?.TokensRemovedDuringTruncation} msgs={tr?.MessagesRemovedDuringTruncation} " +
-                            $"preMsgs={tr?.PreTruncationMessagesLength} postMsgs={tr?.PostTruncationMessagesLength}");
+                            $"\n  [TRUNCATION] by={truncationData?.PerformedBy} limit={truncationData?.TokenLimit} " +
+                            $"pre={truncationData?.PreTruncationTokensInMessages} post={truncationData?.PostTruncationTokensInMessages} " +
+                            $"removed={truncationData?.TokensRemovedDuringTruncation} msgs={truncationData?.MessagesRemovedDuringTruncation} " +
+                            $"preMsgs={truncationData?.PreTruncationMessagesLength} postMsgs={truncationData?.PostTruncationMessagesLength}");
                         break;
 
                     case SessionCompactionStartEvent compactStart:
-                        var cs = compactStart.Data;
+                        var compactStartData = compactStart.Data;
                         streamLog.WriteLine(
-                            $"\n  [COMPACTION START] system={cs?.SystemTokens} conversation={cs?.ConversationTokens} " +
-                            $"toolDefs={cs?.ToolDefinitionsTokens}");
+                            $"\n  [COMPACTION START] system={compactStartData?.SystemTokens} conversation={compactStartData?.ConversationTokens} " +
+                            $"toolDefs={compactStartData?.ToolDefinitionsTokens}");
                         break;
 
                     case SessionCompactionCompleteEvent compactDone:
-                        var cc = compactDone.Data;
+                        var compactDoneData = compactDone.Data;
                         streamLog.WriteLine(
-                            $"\n  [COMPACTION DONE] ok={cc?.Success} pre={cc?.PreCompactionTokens} post={cc?.PostCompactionTokens} " +
-                            $"removed={cc?.MessagesRemoved} compactionTokens={cc?.CompactionTokensUsed} " +
-                            $"error={cc?.Error}");
+                            $"\n  [COMPACTION DONE] ok={compactDoneData?.Success} pre={compactDoneData?.PreCompactionTokens} post={compactDoneData?.PostCompactionTokens} " +
+                            $"removed={compactDoneData?.MessagesRemoved} compactionTokens={compactDoneData?.CompactionTokensUsed} " +
+                            $"error={compactDoneData?.Error}");
                         break;
 
                     // ── Model call failures ──────────────────────────────────────
 
                     case ModelCallFailureEvent callFail:
-                        var cf = callFail.Data;
+                        var callFailData = callFail.Data;
                         _logger.LogWarning("[COPILOT] ModelCallFailure: model={Model} status={Status} error={Error}",
-                            cf?.Model, cf?.StatusCode, cf?.ErrorMessage);
+                            callFailData?.Model, callFailData?.StatusCode, callFailData?.ErrorMessage);
                         streamLog.WriteLine(
-                            $"\n  [MODEL CALL FAILURE] model={cf?.Model} status={cf?.StatusCode} " +
-                            $"error={cf?.ErrorMessage} source={cf?.Source} duration={cf?.DurationMs}ms");
+                            $"\n  [MODEL CALL FAILURE] model={callFailData?.Model} status={callFailData?.StatusCode} " +
+                            $"error={callFailData?.ErrorMessage} source={callFailData?.Source} duration={callFailData?.Duration}ms");
                         break;
 
                     // ── Abort ─────────────────────────────────────────────────────
@@ -350,56 +373,14 @@ public sealed class CopilotSubprocessExecutor : ILlmExecutor
                     case SessionInfoEvent info:
                         streamLog.WriteLine($"\n  [INFO] type={info.Data?.InfoType} msg={info.Data?.Message} tip={info.Data?.Tip}");
 
-                        // Detect model_retry — the CLI is about to retry the request from scratch,
-                        // which discards all accumulated output. Abort and send a continuation instead.
+                        // model_retry: the SDK is retrying the request after a mid-stream server
+                        // error. We defer entirely to its native retry — no interception.
                         if (string.Equals(info.Data?.InfoType, "model_retry", StringComparison.OrdinalIgnoreCase))
                         {
                             modelRetryCount++;
-                            _logger.LogWarning(
-                                "[COPILOT] *** MODEL RETRY #{RetryNum} DETECTED — server error mid-stream. " +
-                                "{Accumulated} chars accumulated so far. ***",
-                                modelRetryCount, deltaAccumulator.Length);
-
-                            if (!modelRetryDetected && continuationAttempts < MaxContinuationAttempts)
-                            {
-                                partialBeforeRetry = deltaAccumulator.ToString();
-                                modelRetryDetected = true;
-
-                                _logger.LogWarning(
-                                    "[COPILOT] *** Aborting CLI retry. Will send continuation prompt " +
-                                    "(attempt {Attempt}/{Max}, {Chars} chars to preserve). ***",
-                                    continuationAttempts + 1, MaxContinuationAttempts, partialBeforeRetry.Length);
-                                streamLog.WriteLine($"\n\n=== MODEL RETRY — ABORTING ({partialBeforeRetry.Length} chars to preserve, attempt {continuationAttempts + 1}/{MaxContinuationAttempts}) ===");
-
-                                FireAndForgetAbort(session!);
-                            }
-                            else if (continuationAttempts >= MaxContinuationAttempts)
-                            {
-                                _logger.LogError(
-                                    "[COPILOT] *** Max continuation attempts ({Max}) exhausted. " +
-                                    "Completing with {Chars} chars of partial output. ***",
-                                    MaxContinuationAttempts, deltaAccumulator.Length);
-                                streamLog.WriteLine($"\n\n=== MAX CONTINUATIONS EXHAUSTED — completing with {deltaAccumulator.Length} chars ===");
-
-                                // Salvage whatever we have — partial output beats nothing.
-                                // AppendResults content takes priority over stdout deltas.
-                                string salvaged = ReadAppendResultsFile(appendResultsPath);
-                                string partialOutput = salvaged.Length > 0
-                                    ? salvaged
-                                    : deltaAccumulator.ToString().TrimEnd();
-                                if (partialOutput.Length > 0)
-                                {
-                                    _logger.LogWarning(
-                                        "[COPILOT] Max continuations exhausted — salvaging {Chars} chars from {Source}.",
-                                        partialOutput.Length, salvaged.Length > 0 ? "AppendResults file" : "stdout accumulator");
-                                    channel.Writer.TryWrite(new LlmCompleted(partialOutput, TokenUsage.Zero));
-                                }
-                                else
-                                    channel.Writer.TryWrite(new LlmFailed("Server error during LLM response — all continuation attempts exhausted."));
-                                channel.Writer.TryComplete();
-
-                                FireAndForgetAbort(session!);
-                            }
+                            _logger.LogWarning("[COPILOT] model_retry #{RetryNum} — deferring to SDK native retry.",
+                                modelRetryCount);
+                            streamLog.WriteLine($"\n  [INFO] model_retry #{modelRetryCount} — deferring to SDK native retry");
                         }
                         break;
 
@@ -411,123 +392,20 @@ public sealed class CopilotSubprocessExecutor : ILlmExecutor
                     // ── Error ─────────────────────────────────────────────────────
 
                     case SessionErrorEvent err:
-                        string errorMessage = err.Data?.Message ?? "Unknown Copilot session error";
-                        _logger.LogError("[COPILOT] SessionError: {Message}", errorMessage);
-                        streamLog.WriteLine($"\n\n=== SESSION ERROR ===\n{errorMessage}");
-
-                        if (LlmRateLimitException.IsRateLimitSignal(errorMessage))
-                        {
-                            channel.Writer.TryWrite(new LlmFailed("__RATE_LIMIT__"));
-                        }
-                        else
-                        {
-                            // Salvage AppendResults content — the whole point of the tool is to
-                            // survive errors. If the model wrote partial content before the error,
-                            // return it as a completed result instead of losing everything.
-                            string salvaged = ReadAppendResultsFile(appendResultsPath);
-                            if (salvaged.Length > 0)
-                            {
-                                _logger.LogWarning(
-                                    "[COPILOT] SessionError occurred but AppendResults file has {Chars} chars — salvaging.",
-                                    salvaged.Length);
-                                streamLog.WriteLine($"\n  [SALVAGE] AppendResults file has {salvaged.Length} chars — returning partial output");
-                                channel.Writer.TryWrite(new LlmCompleted(salvaged, TokenUsage.Zero));
-                            }
-                            else
-                            {
-                                channel.Writer.TryWrite(new LlmFailed(errorMessage));
-                            }
-                        }
-                        channel.Writer.TryComplete();
+                        HandleSessionError(
+                            err.Data?.Message ?? "Unknown Copilot session error",
+                            appendResultsPath, streamLog, channel.Writer);
                         break;
 
                     case SessionIdleEvent:
                         if (!channel.Reader.Completion.IsCompleted)
                         {
-                            // After aborting a model_retry, the session goes idle. Instead of
-                            // completing, send a continuation prompt so the model picks up
-                            // where the server error cut it off.
-                            if (modelRetryDetected && partialBeforeRetry is not null
-                                && continuationAttempts < MaxContinuationAttempts)
-                            {
-                                modelRetryDetected = false;
-                                continuationAttempts++;
-
-                                // Reset accumulator to the clean pre-retry snapshot.
-                                deltaAccumulator.Clear();
-                                deltaAccumulator.Append(partialBeforeRetry);
-                                turnDeltaLength = 0;
-
-                                // Build continuation prompt with trailing context for the model.
-                                // In AppendResults mode, use the temp file content (the real output)
-                                // instead of stdout deltas (which are just confirmation noise).
-                                string contextSource;
-                                if (appendResultsPath is not null)
-                                {
-                                    string appendContent = ReadAppendResultsFile(appendResultsPath);
-                                    contextSource = appendContent.Length > 0 ? appendContent : partialBeforeRetry;
-                                }
-                                else
-                                {
-                                    contextSource = partialBeforeRetry;
-                                }
-
-                                int tailLength = Math.Min(contextSource.Length, 2000);
-                                string tail = contextSource[^tailLength..];
-                                string continuationPrompt =
-                                    $"Your previous response was interrupted by a server error after producing " +
-                                    $"{contextSource.Length} characters. Here is the end of what you produced:\n\n" +
-                                    $"```\n{tail}\n```\n\n" +
-                                    "Continue EXACTLY from where you left off. Do not repeat any content already shown above. " +
-                                    "Do not add any preamble or explanation — just continue the output." +
-                                    (appendResultsPath is not null
-                                        ? " Continue writing via the AppendResults tool."
-                                        : string.Empty);
-
-                                _logger.LogWarning(
-                                    "[COPILOT] *** Sending continuation prompt (attempt {Attempt}/{Max}, " +
-                                    "{PartialChars} chars preserved, {TailChars} chars of trailing context). ***",
-                                    continuationAttempts, MaxContinuationAttempts,
-                                    partialBeforeRetry.Length, tailLength);
-                                streamLog.WriteLine($"\n\n=== CONTINUATION PROMPT (attempt {continuationAttempts}/{MaxContinuationAttempts}, {tailLength} chars of context) ===");
-
-                                _ = session!.SendAsync(new MessageOptions { Prompt = continuationPrompt }, linked)
-                                    .ContinueWith(t =>
-                                    {
-                                        if (t.IsFaulted)
-                                        {
-                                            _logger.LogError("[COPILOT] Continuation SendAsync failed: {Error}",
-                                                t.Exception?.InnerException?.Message);
-                                            channel.Writer.TryWrite(new LlmFailed(
-                                                $"Continuation prompt failed: {t.Exception?.InnerException?.Message}"));
-                                            channel.Writer.TryComplete();
-                                        }
-                                    }, TaskScheduler.Default);
-                                break;
-                            }
-
                             // AppendResults mode — read the temp file as the authoritative output.
                             // The model wrote content incrementally via tool calls; stdout is
                             // just a confirmation message and should be ignored.
                             if (appendResultsPath is not null)
                             {
-                                string appendOutput = ReadAppendResultsFile(appendResultsPath);
-
-                                if (appendOutput.Length > 0)
-                                {
-                                    _logger.LogInformation("[COPILOT] AppendResults output: {Chars} chars from {Path}",
-                                        appendOutput.Length, appendResultsPath);
-                                    streamLog.WriteLine($"\n\n=== FINAL OUTPUT (AppendResults: {appendOutput.Length} chars from {appendResultsPath}) ===");
-                                    channel.Writer.TryWrite(new LlmCompleted(appendOutput, TokenUsage.Zero));
-                                }
-                                else
-                                {
-                                    _logger.LogError("[COPILOT] AppendResults file is empty — model never called the tool");
-                                    streamLog.WriteLine("\n\n=== SESSION IDLE — AppendResults file EMPTY ===");
-                                    channel.Writer.TryWrite(new LlmFailed("AppendResults file is empty — model never called the tool."));
-                                }
-
-                                channel.Writer.TryComplete();
+                                CompleteFromAppendResults(appendResultsPath, streamLog, channel.Writer);
                                 break;
                             }
 
@@ -611,6 +489,13 @@ public sealed class CopilotSubprocessExecutor : ILlmExecutor
             }
 
             string prompt = ctx.UserPrompt + BuildPromptSuffix(ctx);
+
+            // The long-context tier is applied at session-creation time via SessionConfig.ContextTier
+            // in BuildSessionConfig — that is the SDK's documented create_session(context_tier=...)
+            // path (microsoft/conductor#251). Do NOT re-apply it here with SetModelAsync: switching
+            // the model / overriding capabilities on an already-created CLI session is rejected by the
+            // backend ("Session was not created with authentication info or custom provider") and
+            // kills the run with no output. Create-time ContextTier is the only supported mechanism.
 
             // SendAsync queues the message and returns immediately. The session runs
             // autonomously — events fire via the On() handler above. SessionIdleEvent
@@ -700,6 +585,10 @@ public sealed class CopilotSubprocessExecutor : ILlmExecutor
             Streaming = true,
             OnPermissionRequest = BuildPermissionHandler(ctx, onShellRejected),
             InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
+            // Strip the multi-agent orchestration suite. These tools (task/read_agent/…) let the
+            // model spawn background sub-agents instead of doing the single-document job, which is
+            // how phase-03-01 thrashed itself to death. ExcludedTools is the SDK's supported gate.
+            ExcludedTools = ExcludedBuiltInTools,
             Hooks = new SessionHooks
             {
                 OnErrorOccurred = (input, _) =>
@@ -724,22 +613,22 @@ public sealed class CopilotSubprocessExecutor : ILlmExecutor
             {
                 Mode    = SystemMessageMode.Customize,
                 Content = ctx.SystemPrompt,
-                Sections = new Dictionary<string, SectionOverride>
+                Sections = new Dictionary<SystemMessageSection, SectionOverride>
                 {
-                    [SystemPromptSections.Identity] = new()
+                    [SystemMessageSection.Identity] = new()
                     {
                         Action = SectionOverrideAction.Replace,
                         Content = "You are a code analysis and generation engine. " +
                                   "Follow the instructions in the custom instructions section exactly. " +
                                   "Use your file-reading tools to explore the codebase as needed."
                     },
-                    [SystemPromptSections.Tone] = new()
+                    [SystemMessageSection.Tone] = new()
                     {
                         Action = SectionOverrideAction.Replace,
                         Content = "Output only what is requested. No preamble, no sign-off, " +
                                   "no narration of your intent. Do not explain what you are about to do."
                     },
-                    [SystemPromptSections.CodeChangeRules] = new()
+                    [SystemMessageSection.CodeChangeRules] = new()
                     {
                         Action = SectionOverrideAction.Remove
                     }
@@ -750,16 +639,29 @@ public sealed class CopilotSubprocessExecutor : ILlmExecutor
         // Override max output tokens so the Copilot CLI knows the model's true ceiling.
         // Without this, the CLI uses its own default which may be much lower than what
         // the model supports, causing the agentic loop to re-prompt on truncation.
+        // NOTE: deliberately NOT setting a numeric context-window override here. An explicit window
+        // override is clamped to the model's default (~200k) and suppresses the long-context tier's
+        // derived window. The context window is controlled exclusively by ContextTier (below).
         if (ctx.MaxOutputTokens > 0)
         {
-            config.ModelCapabilities = new Rpc.ModelCapabilitiesOverride
-            {
-                Limits = new Rpc.ModelCapabilitiesOverrideLimits
-                {
-                    MaxOutputTokens = ctx.MaxOutputTokens
-                }
-            };
+            // GHCP001: ModelCapabilitiesOverride is a preview SDK surface. Deliberately opted in —
+            // it's the only way to tell the CLI the model's true output ceiling.
+#pragma warning disable GHCP001
+            Rpc.ModelCapabilitiesOverrideLimits limits = new() { MaxOutputTokens = ctx.MaxOutputTokens };
+            config.ModelCapabilities = new Rpc.ModelCapabilitiesOverride { Limits = limits };
+#pragma warning restore GHCP001
         }
+
+        // The large context window on tiered models (e.g. Claude Opus's 1M) is a separate
+        // "long context" tier that defaults to ~200k. A numeric token override does NOT unlock it
+        // — the CLI clamps to the model's default tier and ignores any higher number. Requesting
+        // the long-context tier at session-creation time is what actually unlocks the capacity;
+        // the session then derives its effective capability overrides (token display, compaction,
+        // truncation, request limits) from the tier. This is the SDK's documented
+        // create_session(context_tier=...) path (microsoft/conductor#251) and the ONLY supported
+        // mechanism. (Non-default tiers may carry higher per-token pricing.)
+        if (ctx.ContextTier == LlmContextTier.LongContext)
+            config.ContextTier = ContextTier.LongContext;
 
         return config;
     }
@@ -768,7 +670,11 @@ public sealed class CopilotSubprocessExecutor : ILlmExecutor
     /// Creates a permission handler that denies shell execution unconditionally and
     /// controls file write access based on the execution context.
     /// </summary>
-    private PermissionRequestHandler BuildPermissionHandler(LlmExecutionContext ctx, Action? onShellRejected = null)
+    // GHCP001: PermissionDecision is a preview SDK surface. Deliberately opted in — it's the
+    // permission-callback return contract; there is no stable alternative in 1.0.4.
+#pragma warning disable GHCP001
+    private Func<PermissionRequest, PermissionInvocation, Task<Rpc.PermissionDecision>> BuildPermissionHandler(
+        LlmExecutionContext ctx, Action? onShellRejected = null)
     {
         bool allowWrites = (ctx.EnableFileTools && !ctx.EnableReadOnlyFileTools) ||
                            ctx.OutputFilePath is not null;
@@ -779,27 +685,19 @@ public sealed class CopilotSubprocessExecutor : ILlmExecutor
             {
                 _logger.LogWarning("[COPILOT] Permission denied: shell — will inject recovery prompt on idle");
                 onShellRejected?.Invoke();
-                return Task.FromResult(new PermissionRequestResult
-                {
-                    Kind = PermissionRequestResultKind.Rejected
-                });
+                return Task.FromResult(Rpc.PermissionDecision.Reject("Shell tools are blocked in this environment."));
             }
 
             if (string.Equals(request.Kind, "write", StringComparison.OrdinalIgnoreCase) && !allowWrites)
             {
                 _logger.LogDebug("[COPILOT] Permission denied: write");
-                return Task.FromResult(new PermissionRequestResult
-                {
-                    Kind = PermissionRequestResultKind.Rejected
-                });
+                return Task.FromResult(Rpc.PermissionDecision.Reject("File writes are not permitted for this operation."));
             }
 
-            return Task.FromResult(new PermissionRequestResult
-            {
-                Kind = PermissionRequestResultKind.Approved
-            });
+            return Task.FromResult(Rpc.PermissionDecision.ApproveOnce());
         };
     }
+#pragma warning restore GHCP001
 
     /// <summary>
     /// Determines the prompt suffix that tells the model HOW to emit output.
@@ -853,6 +751,80 @@ public sealed class CopilotSubprocessExecutor : ILlmExecutor
     /// completes it. Returns <c>true</c> if content was salvaged; <c>false</c> if the caller
     /// should fall back to its own error handling.
     /// </summary>
+    /// <summary>
+    /// Handles a Copilot <see cref="SessionErrorEvent"/>: classifies rate-limit signals, salvages any
+    /// partial AppendResults content as a completed result, and otherwise fails the channel. Always
+    /// completes the writer — a session error is terminal for the run.
+    /// </summary>
+    /// <param name="errorMessage">The error text reported by the session.</param>
+    /// <param name="appendResultsPath">Path to the AppendResults temp file, or null when the tool is disabled.</param>
+    /// <param name="streamLog">Diagnostic stream log for the run.</param>
+    /// <param name="writer">Channel writer feeding the async-enumerable consumer.</param>
+    private void HandleSessionError(
+        string errorMessage, string? appendResultsPath,
+        StreamDiagnosticLog streamLog, ChannelWriter<LlmOutputEvent> writer)
+    {
+        _logger.LogError("[COPILOT] SessionError: {Message}", errorMessage);
+        streamLog.WriteLine($"\n\n=== SESSION ERROR ===\n{errorMessage}");
+
+        if (LlmRateLimitException.IsRateLimitSignal(errorMessage))
+        {
+            writer.TryWrite(new LlmFailed("__RATE_LIMIT__"));
+        }
+        else
+        {
+            // Salvage AppendResults content — the whole point of the tool is to survive errors.
+            // If the model wrote partial content before the error, return it as a completed result
+            // instead of losing everything.
+            string salvaged = ReadAppendResultsFile(appendResultsPath);
+            if (salvaged.Length > 0)
+            {
+                _logger.LogWarning(
+                    "[COPILOT] SessionError occurred but AppendResults file has {Chars} chars — salvaging.",
+                    salvaged.Length);
+                streamLog.WriteLine($"\n  [SALVAGE] AppendResults file has {salvaged.Length} chars — returning partial output");
+                writer.TryWrite(new LlmCompleted(salvaged, TokenUsage.Zero));
+            }
+            else
+            {
+                writer.TryWrite(new LlmFailed(errorMessage));
+            }
+        }
+
+        writer.TryComplete();
+    }
+
+    /// <summary>
+    /// Resolves the final output for an idle session running in AppendResults mode. The model wrote
+    /// content incrementally via tool calls, so the temp file — not stdout — is authoritative. Writes
+    /// a completed result when the file has content, a failure when it is empty, then completes the channel.
+    /// </summary>
+    /// <param name="appendResultsPath">Path to the AppendResults temp file (non-null in this mode).</param>
+    /// <param name="streamLog">Diagnostic stream log for the run.</param>
+    /// <param name="writer">Channel writer feeding the async-enumerable consumer.</param>
+    private void CompleteFromAppendResults(
+        string appendResultsPath, StreamDiagnosticLog streamLog,
+        ChannelWriter<LlmOutputEvent> writer)
+    {
+        string appendOutput = ReadAppendResultsFile(appendResultsPath);
+
+        if (appendOutput.Length > 0)
+        {
+            _logger.LogInformation("[COPILOT] AppendResults output: {Chars} chars from {Path}",
+                appendOutput.Length, appendResultsPath);
+            streamLog.WriteLine($"\n\n=== FINAL OUTPUT (AppendResults: {appendOutput.Length} chars from {appendResultsPath}) ===");
+            writer.TryWrite(new LlmCompleted(appendOutput, TokenUsage.Zero));
+        }
+        else
+        {
+            _logger.LogError("[COPILOT] AppendResults file is empty — model never called the tool");
+            streamLog.WriteLine("\n\n=== SESSION IDLE — AppendResults file EMPTY ===");
+            writer.TryWrite(new LlmFailed("AppendResults file is empty — model never called the tool."));
+        }
+
+        writer.TryComplete();
+    }
+
     private bool TrySalvageAndComplete(
         string? appendResultsPath, StreamDiagnosticLog streamLog,
         ChannelWriter<LlmOutputEvent> writer, string logLabel)
@@ -868,19 +840,6 @@ public sealed class CopilotSubprocessExecutor : ILlmExecutor
 
         writer.TryComplete();
         return salvaged.Length > 0;
-    }
-
-    /// <summary>
-    /// Aborts the session without awaiting — used when the CLI starts an unwanted retry
-    /// and we need to kill it before sending our own continuation prompt.
-    /// </summary>
-    private void FireAndForgetAbort(CopilotSession session)
-    {
-        _ = session.AbortAsync().ContinueWith(t =>
-        {
-            if (t.IsFaulted)
-                _logger.LogWarning("[COPILOT] AbortAsync failed: {Error}", t.Exception?.InnerException?.Message);
-        }, TaskScheduler.Default);
     }
 
     /// <summary>

@@ -3,8 +3,13 @@ using OpenTransmute.Models;
 
 namespace OpenTransmute.Cli.Commands;
 
+/// <summary>
+/// <c>settings</c> command — shows or updates the persisted CLI settings (defaults applied to
+/// subsequent commands).
+/// </summary>
 internal static class SettingsCommand
 {
+    /// <summary>Builds the <c>settings</c> command, wiring its options and run action.</summary>
     internal static Command Build(CliSettings settings, CliSettingsStore store)
     {
         var cmd = new Command("settings", "Show or update persisted CLI settings");
@@ -31,15 +36,15 @@ internal static class SettingsCommand
 
         cmd.SetAction((parseResult) =>
         {
-            var orch      = parseResult.GetValue(orchOpt);
-            var endpoint  = parseResult.GetValue(endpointOpt);
-            var thick     = parseResult.GetValue(thickOpt);
-            var regular   = parseResult.GetValue(regularOpt);
-            var thin      = parseResult.GetValue(thinOpt);
-            var maxTurns  = parseResult.GetValue(maxTurnsOpt);
-            var maxTokens = parseResult.GetValue(maxTokensOpt);
-            var timeout   = parseResult.GetValue(timeoutOpt);
-            var ethos     = parseResult.GetValue(ethosOpt);
+            OrchestratorType? orch = parseResult.GetValue(orchOpt);
+            string? endpoint = parseResult.GetValue(endpointOpt);
+            string? thick = parseResult.GetValue(thickOpt);
+            string? regular = parseResult.GetValue(regularOpt);
+            string? thin = parseResult.GetValue(thinOpt);
+            int? maxTurns = parseResult.GetValue(maxTurnsOpt);
+            int? maxTokens = parseResult.GetValue(maxTokensOpt);
+            int? timeout = parseResult.GetValue(timeoutOpt);
+            string? ethos = parseResult.GetValue(ethosOpt);
 
             bool anyChange = orch.HasValue || endpoint is not null || thick is not null
                              || regular is not null || thin is not null

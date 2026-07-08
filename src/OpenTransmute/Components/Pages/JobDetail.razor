@@ -6,6 +6,7 @@
 @inject LlmSettingsService LlmSettings
 @inject PromptTemplates PhaseTemplates
 @inject JobPersistenceService Persistence
+@inject ISnackbar Snackbar
 @implements IDisposable
 @namespace OpenTransmute.Components.Pages
 
@@ -28,6 +29,20 @@
         <MudText Typo="Typo.h5">@_job.Options.ProjectName</MudText>
     }
     <MudChip T="string" Size="Size.Small" Color="@StatusColor(_job.Status)">@_job.Status</MudChip>
+    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning"
+               StartIcon="@Icons.Material.Filled.RestartAlt"
+               OnClick="ResetJob">
+        Reset
+    </MudButton>
+    @if (_job.Status is not JobStatus.Running and not JobStatus.Pending)
+    {
+        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Replay"
+                   Disabled="_rerunning"
+                   OnClick="() => RequestRerun(0, null)">
+            Re-run from Phase 0
+        </MudButton>
+    }
     @if (_job.Status is JobStatus.Running or JobStatus.Pending)
     {
         <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Error"
@@ -82,6 +97,17 @@ else
                 Override the engine or AppendResults mode for individual phases before re-running.
                 Blank engine = use the original job's engine (@_job.Options.Orchestrator).
             </MudText>
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-3">
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.Sync"
+                           OnClick="RePullModelSettingsAsync">
+                    Re-pull model settings
+                </MudButton>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    Refresh this job's engine, per-tier models, and token limits from the current global Settings.
+                    Applies to future re-runs — needed to pick up caps changed after the job was created.
+                </MudText>
+            </MudStack>
             <MudSimpleTable Dense="true" Hover="true" Bordered="true">
                 <thead>
                     <tr>
@@ -224,18 +250,47 @@ else
     </MudAlert>
 }
 
+@if (_expansionPlan is not null && _expansionItems is null
+     && _expansionPlan.Any(i => !i.Done)
+     && _job.Status is not JobStatus.Running and not JobStatus.Pending)
+{
+    <MudAlert Severity="Severity.Warning" Class="mb-4">
+        <MudText Typo="Typo.body2" Class="mb-2">
+            Partial Phase 3 detected — @_expansionPlan.Count(i => i.Done) of @_expansionPlan.Count
+            component specs complete (discovery plan found on disk). Resume continues at item
+            @_expansionFirstMissing without re-running finished specs.
+        </MudText>
+        <MudStack Row="true" Spacing="2">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.PlayArrow"
+                       Disabled="_rerunning"
+                       OnClick="ResumeExpansionFromFirstMissing">
+                Resume Phase 3 from item @_expansionFirstMissing
+            </MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.SkipNext"
+                       Disabled="_rerunning"
+                       OnClick="ShowExpansionResume">
+                Choose item…
+            </MudButton>
+        </MudStack>
+    </MudAlert>
+}
+
 @if (_expansionItems is not null)
 {
     <MudAlert Severity="Severity.Info" Class="mb-4">
         <MudText Typo="Typo.body2" Class="mb-2">
-            Phase 3 has @_expansionItems.Count completed item(s) on disk. Pick where to resume:
+            Phase 3 plan — @_expansionItems.Count(i => i.Done) of @_expansionItems.Count component specs complete.
+            Pick where to resume; items before the chosen one are kept.
         </MudText>
-        <MudSelect T="int" @bind-Value="_selectedStartItem" Label="Resume from item"
+        <MudSelect T="int" @bind-Value="_selectedStartItem" Label="Resume at item"
                    Dense="true" Variant="Variant.Outlined">
-            <MudSelectItem T="int" Value="1">1 — Re-run all items (keep discovery)</MudSelectItem>
             @foreach (var item in _expansionItems)
             {
-                <MudSelectItem T="int" Value="@(item.Index + 1)">@(item.Index + 1) — after @item.Name</MudSelectItem>
+                <MudSelectItem T="int" Value="@item.Index">
+                    @item.Index — @item.Name @(item.Done ? "(done)" : "(missing)")
+                </MudSelectItem>
             }
         </MudSelect>
         <MudStack Row="true" Class="mt-2" Spacing="2">
@@ -339,6 +394,10 @@ else
     private List<ExpansionFileInfo>? _expansionItems;
     private int _selectedStartItem = 1;
 
+    // Auto-detected Phase 3 plan from 03-00-discovery.json (null = no discovery on disk).
+    private List<ExpansionFileInfo>? _expansionPlan;
+    private int _expansionFirstMissing = 1;
+
     // Edit mode state
     private bool _editing;
     private bool _saving;
@@ -350,7 +409,7 @@ else
     // Cached per-phase on-disk output flags — avoids repeated filesystem scans during render.
     private readonly HashSet<int> _diskOutputPhases = new();
 
-    private record ExpansionFileInfo(int Index, string Name, string Path);
+    private record ExpansionFileInfo(int Index, string Name, bool Done);
 
     /// <summary>Mutable row backing the per-phase configuration table.</summary>
     private sealed class PhaseConfig
@@ -468,6 +527,7 @@ else
             ThickMaxOutputTokens   = o.ThickMaxOutputTokens,
             RegularMaxOutputTokens = o.RegularMaxOutputTokens,
             ThinMaxOutputTokens    = o.ThinMaxOutputTokens,
+            ContextTier            = o.ContextTier,
             MaxTurns               = o.MaxTurns,
             TimeoutMinutes         = o.TimeoutMinutes,
             KeepClone              = o.KeepClone,
@@ -491,41 +551,75 @@ else
         if (_job is null) return;
         _rerunning = true;
 
-        string dir = System.IO.Path.Combine(_job.Options.OutputRoot, "Output", "Decomposition", _job.Options.ProjectName);
-        List<ExpansionFileInfo> items = new();
-
-        if (Directory.Exists(dir))
+        List<ExpansionFileInfo>? plan = _expansionPlan ??= ScanExpansionPlan();
+        if (plan is null || plan.Count == 0)
         {
-            // Find 03-XX-*.md files (skip 03-00-discovery.json) that are over 1KB
-            foreach (string file in Directory.GetFiles(dir, "03-*.md").OrderBy(f => f))
-            {
-                string name = System.IO.Path.GetFileName(file);
-                if (name.Length < 6) continue;
-
-                // Parse the index from "03-XX-slug.md"
-                if (int.TryParse(name.AsSpan(3, 2), out int idx) && idx > 0)
-                {
-                    FileInfo fi = new FileInfo(file);
-                    if (fi.Length >= 1024)
-                    {
-                        // Derive a readable name from the slug portion
-                        string slug = System.IO.Path.GetFileNameWithoutExtension(name)[6..];
-                        items.Add(new ExpansionFileInfo(idx, slug.Replace('-', ' '), file));
-                    }
-                }
-            }
-        }
-
-        if (items.Count == 0)
-        {
-            // No completed items found — fall back to normal re-run
+            // No discovery JSON on disk — there is no sub-phase plan to resume from.
             _rerunning = false;
             RequestRerun(3, 3);
             return;
         }
 
-        _expansionItems = items;
-        _selectedStartItem = items[^1].Index + 1; // default: resume after the last completed item
+        _expansionItems = plan;
+        _selectedStartItem = plan.FirstOrDefault(i => !i.Done)?.Index ?? plan[^1].Index;
+    }
+
+    /// <summary>
+    /// Reads 03-00-discovery.json and pairs each planned component group with its on-disk
+    /// spec file (03-{index:00}-*.md, non-empty). Returns the ordered plan with a Done flag
+    /// per item, or null when no discovery file exists or it cannot be parsed.
+    /// </summary>
+    private List<ExpansionFileInfo>? ScanExpansionPlan()
+    {
+        if (_job is null) return null;
+
+        string dir = System.IO.Path.Combine(_job.Options.OutputRoot, "Output", "Decomposition", _job.Options.ProjectName);
+        string discoveryPath = System.IO.Path.Combine(dir, "03-00-discovery.json");
+        if (!File.Exists(discoveryPath)) return null;
+
+        try
+        {
+            string json = File.ReadAllText(discoveryPath);
+
+            // Use the orchestrator's own lenient parser so the resume planner agrees with the
+            // live run. A strict array parse here silently failed on fence-wrapped discovery
+            // JSON, collapsing "resume from item" into a full-phase re-run.
+            IReadOnlyList<string>? names = OpenTransmute.Orchestration.JobOrchestrator.TryParseDiscoveryGroupNames(json);
+            if (names is null || names.Count == 0) return null;
+
+            List<ExpansionFileInfo> plan = new(names.Count);
+            for (int i = 0; i < names.Count; i++)
+            {
+                int index = i + 1;
+                plan.Add(new ExpansionFileInfo(index, names[i], ExpansionItemOnDisk(dir, index)));
+            }
+
+            return plan;
+        }
+        catch (Exception)
+        {
+            // Unreadable discovery file — treat as "no resume info" rather than guessing.
+            return null;
+        }
+    }
+
+    /// <summary>True when a non-empty spec file (03-{index:00}-*.md) exists for the item.</summary>
+    private static bool ExpansionItemOnDisk(string dir, int index)
+    {
+        if (!Directory.Exists(dir)) return false;
+        foreach (string file in Directory.EnumerateFiles(dir, $"03-{index:00}-*.md"))
+        {
+            if (new FileInfo(file).Length > 0) return true;
+        }
+        return false;
+    }
+
+    /// <summary>Resumes Phase 3 at the first missing component spec, keeping completed items.</summary>
+    private void ResumeExpansionFromFirstMissing()
+    {
+        if (_job is null || _rerunning) return;
+        _rerunning = true;
+        _ = RerunWithStartItemAsync(3, 3, _expansionFirstMissing);
     }
 
     private void RequestExpansionResume()
@@ -561,6 +655,33 @@ else
         }
     }
 
+    /// <summary>
+    /// Clears a wedged job: stops any spinning phase, forces the job back to a clean Failed
+    /// state, and persists. Use when a run died abnormally (e.g. output deleted mid-run) and
+    /// the UI is stuck with a Failed badge but a phase still showing Running. Works regardless
+    /// of current status, unlike Abort/ForceFail which no-op on an already-Failed job.
+    /// </summary>
+    private async Task ResetJob()
+    {
+        if (_job is null) return;
+
+        _job.Reset();
+        _rerunning = false;       // release any latched re-run guard from the dead attempt
+        _expansionItems = null;   // drop stale resume-dialog state
+
+        try
+        {
+            await Persistence.SaveAsync(_job);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Reset applied in memory, but saving failed: {ex.Message}", Severity.Warning);
+            return;
+        }
+
+        Snackbar.Add("Job reset — stuck phases cleared. You can re-run now.", Severity.Success);
+    }
+
     private void StartEdit()
     {
         if (_job is null) return;
@@ -574,6 +695,39 @@ else
     private void CancelEdit()
     {
         _editing = false;
+    }
+
+    /// <summary>
+    /// Copies the current global LLM settings (engine, per-tier models, endpoint, and all
+    /// token limits) onto this job's stored options and persists them. Re-runs read models
+    /// and token limits straight off the job, so this is how an existing job picks up
+    /// settings changed after it was created — e.g. a raised Phase 3 (thick) token cap.
+    /// The API key is intentionally left alone; the re-run flow pulls it live when needed.
+    /// </summary>
+    private async Task RePullModelSettingsAsync()
+    {
+        if (_job is null) return;
+
+        DecomposeOptions o = _job.Options;
+        o.Orchestrator           = LlmSettings.Orchestrator;
+        o.ThickModel             = LlmSettings.ThickModel;
+        o.RegularModel           = LlmSettings.RegularModel;
+        o.ThinModel              = LlmSettings.ThinModel;
+        o.OpenAiEndpoint         = LlmSettings.OpenAiEndpoint;
+        o.MaxOutputTokens        = LlmSettings.MaxOutputTokens;
+        o.ThickMaxOutputTokens   = LlmSettings.ThickMaxOutputTokens;
+        o.RegularMaxOutputTokens = LlmSettings.RegularMaxOutputTokens;
+        o.ThinMaxOutputTokens    = LlmSettings.ThinMaxOutputTokens;
+        o.ContextTier            = LlmSettings.ContextTier;
+        o.MaxTurns               = LlmSettings.MaxTurns;
+        o.TimeoutMinutes         = LlmSettings.TimeoutMinutes;
+
+        await Persistence.SaveAsync(_job);
+        Snackbar.Add(
+            $"Pulled current model settings — engine {o.Orchestrator}, thick cap {o.ThickMaxOutputTokens:N0} tokens.",
+            Severity.Success);
+
+        _job.NotifyChanged();
     }
 
     private async Task SaveEditAsync()
@@ -680,6 +834,12 @@ else
             if (hasOutput)
                 _diskOutputPhases.Add(phase);
         }
+
+        // Build the Phase 3 resume plan from the discovery JSON (if any) so the UI can
+        // detect a partial expansion run and skip the specs already on disk.
+        _expansionPlan = ScanExpansionPlan();
+        _expansionFirstMissing = _expansionPlan?.FirstOrDefault(i => !i.Done)?.Index
+            ?? ((_expansionPlan?.Count ?? 0) + 1);
     }
 
     public void Dispose()

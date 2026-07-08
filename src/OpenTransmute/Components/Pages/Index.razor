@@ -58,7 +58,7 @@
 
                     <MudItem xs="12" sm="2">
                         <MudNumericField @bind-Value="_options.MaxOutputTokens" Label="Max Tokens"
-                                         Min="0" Max="32768"
+                                         Min="0" Max="1000000" Step="4096"
                                          HelperText="0 = auto" />
                     </MudItem>
 
@@ -187,6 +187,7 @@
         _options.ThickMaxOutputTokens   = LlmSettings.ThickMaxOutputTokens;
         _options.RegularMaxOutputTokens = LlmSettings.RegularMaxOutputTokens;
         _options.ThinMaxOutputTokens    = LlmSettings.ThinMaxOutputTokens;
+        _options.ContextTier = LlmSettings.ContextTier;
         _options.TimeoutMinutes         = LlmSettings.TimeoutMinutes;
 
         _phaseConfigs = Phases.Phases.Select(p =>

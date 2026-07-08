@@ -80,6 +80,10 @@ public abstract class BaseSectionParser : ISectionParser
         }
     }
 
+    /// <summary>
+    /// Serializes the section-specific fields of a single entry into the JSON details blob stored
+    /// on the inventory item. Subclasses define which fields their section contributes.
+    /// </summary>
     protected abstract string BuildDetailsJson(string entryMarkdown);
 
     /// <summary>
@@ -89,8 +93,8 @@ public abstract class BaseSectionParser : ISectionParser
     /// </summary>
     private static string StripSecurityFields(string entry)
     {
-        var lines = entry.Split('\n');
-        var result = new List<string>(lines.Length);
+        string[] lines = entry.Split('\n');
+        List<string> result = new List<string>(lines.Length);
         foreach (string line in lines)
         {
             string trimmed = line.TrimStart('-', ' ', '\t');

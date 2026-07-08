@@ -31,6 +31,9 @@ public class UserSettings
     public int RegularMaxOutputTokens { get; set; } = 16384;
     public int ThinMaxOutputTokens    { get; set; } = 8192;
 
+    /// <summary>Context-window tier for the Copilot CLI path. Default = ~200k; LongContext = the model's expanded window.</summary>
+    public LlmContextTier ContextTier { get; set; } = LlmContextTier.Default;
+
     // ── Personal composition ethos ────────────────────────────────────────────
     /// <summary>
     /// Free-form text describing the user's preferred coding style, naming conventions,

@@ -1,5 +1,9 @@
 namespace OpenTransmute.Models;
 
+/// <summary>
+/// Selects which LLM backend executes a job. Each value maps to a concrete
+/// <c>ILlmExecutor</c> implementation resolved at run time.
+/// </summary>
 public enum OrchestratorType
 {
     /// <summary>

@@ -61,7 +61,8 @@ public class DecomposeOptions
 
     /// <summary>
     /// 0 = auto (uses per-weight defaults below).
-    /// Nonzero caps all phases at this value (still bounded by per-weight default). No effect for Claude Code.
+    /// Nonzero is a true cap applied to all phases, overriding the per-weight defaults.
+    /// No effect for Claude Code.
     /// </summary>
     public int MaxOutputTokens { get; set; } = 0;
 
@@ -73,6 +74,13 @@ public class DecomposeOptions
 
     /// <summary>Per-weight output token ceiling for light phases.</summary>
     public int ThinMaxOutputTokens    { get; set; } = 8192;
+
+    /// <summary>
+    /// Context-window tier for the Copilot CLI path. <see cref="LlmContextTier.Default"/> uses
+    /// the CLI default (~200k); <see cref="LlmContextTier.LongContext"/> requests the model's
+    /// expanded window (e.g. 1M) so large Phase 3 runs aren't silently capped. No effect on Claude/OpenAI.
+    /// </summary>
+    public LlmContextTier ContextTier { get; set; } = LlmContextTier.Default;
 
     /// <summary>HTTP + network timeout in minutes. Applied to OpenAI / Ollama requests.</summary>
     public int TimeoutMinutes { get; set; } = 10;

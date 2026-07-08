@@ -32,14 +32,20 @@ public class SourceFileFilter
     /// Returns (relativePath, absolutePath) tuples for each file.
     /// </summary>
     /// <param name="rootPath">The root directory to enumerate from.</param>
+    /// <param name="inspectContent">
+    /// When true (default), every candidate file is opened and sniffed for null bytes to exclude binaries
+    /// that slipped past the extension list. Set false for structural scans (e.g. digests) over very large
+    /// trees: the per-file open is what makes a 70k-file repo crawl — on Windows each open is intercepted by
+    /// AV. Extension/name/size rules still apply, so the result is only marginally less precise.
+    /// </param>
     /// <returns>Pairs of (relative path with forward slashes, absolute path) for each included file.</returns>
-    public IEnumerable<(string RelativePath, string AbsolutePath)> Apply(string rootPath)
+    public IEnumerable<(string RelativePath, string AbsolutePath)> Apply(string rootPath, bool inspectContent = true)
     {
         TransmuteIgnore ignore = TransmuteIgnore.Load(rootPath);
-        return EnumerateFiles(rootPath, rootPath, ignore);
+        return EnumerateFiles(rootPath, rootPath, ignore, inspectContent);
     }
 
-    private IEnumerable<(string, string)> EnumerateFiles(string root, string current, TransmuteIgnore ignore)
+    private IEnumerable<(string, string)> EnumerateFiles(string root, string current, TransmuteIgnore ignore, bool inspectContent)
     {
         // Skip excluded directories
         foreach (string dir in Directory.GetDirectories(current))
@@ -50,7 +56,7 @@ public class SourceFileFilter
             string rel = Path.GetRelativePath(root, dir).Replace('\\', '/');
             if (ignore.IsIgnored(rel, isDirectory: true)) continue;
 
-            foreach (var f in EnumerateFiles(root, dir, ignore))
+            foreach (var f in EnumerateFiles(root, dir, ignore, inspectContent))
                 yield return f;
         }
 
@@ -61,7 +67,7 @@ public class SourceFileFilter
             if (FilterRules.ExcludedFileNames.Contains(info.Name)) continue;
             if (FilterRules.ExcludedExtensions.Contains(info.Extension)) continue;
             if (info.Length > FilterRules.MaxFileSizeBytes) continue;
-            if (IsBinary(file)) continue;
+            if (inspectContent && IsBinary(file)) continue;
 
             string rel = Path.GetRelativePath(root, file).Replace('\\', '/');
             if (ignore.IsIgnored(rel, isDirectory: false)) continue;

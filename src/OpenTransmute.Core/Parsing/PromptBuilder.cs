@@ -15,7 +15,7 @@ namespace OpenTransmute.Parsing;
 ///   &lt;path&gt;         — absolute path to the source directory
 ///   &lt;ListItem.X&gt;   — field X from the current expansion JSON item (e.g. groupName, files)
 /// </summary>
-public sealed class PromptBuilder(PromptTemplates templates)
+public sealed class PromptBuilder(PromptTemplates templates, ILogger<PromptBuilder> logger)
 {
     #region Properties
 
@@ -93,6 +93,9 @@ public sealed class PromptBuilder(PromptTemplates templates)
             throw new InvalidOperationException($"Phase {phase.Number} has no DiscoveryPrompt.");
 
         string prompt = SubstituteCommon(phase.DiscoveryPrompt, context);
+        prompt = prompt.Replace("<GroupCountGuidance>",
+            string.IsNullOrWhiteSpace(context.GroupCountGuidance) ? "3–8 groups" : context.GroupCountGuidance,
+            StringComparison.OrdinalIgnoreCase);
         prompt = PrependPriorContext(prompt, FilterPriorPaths(context.PriorOutputPaths, phase.PriorContextPhases));
         return AppendHints(prompt, context.Hints);
     }
@@ -140,8 +143,15 @@ public sealed class PromptBuilder(PromptTemplates templates)
 
         // Read the spec file and prepend its content so the model has everything in-prompt.
         string content;
-        try { content = File.ReadAllText(sourceSpecFilePath, System.Text.Encoding.UTF8); }
-        catch (Exception ex) { content = $"[Error reading {filename}: {ex.Message}]"; }
+        try
+        {
+            content = File.ReadAllText(sourceSpecFilePath, System.Text.Encoding.UTF8);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "BuildSynthesisChunkPrompt: could not read spec file {File}", sourceSpecFilePath);
+            content = $"[Error reading {filename}: {ex.Message}]";
+        }
 
         StringBuilder sb = new StringBuilder();
         sb.AppendLine($"The following is the full content of {filename}:");
@@ -180,9 +190,12 @@ public sealed class PromptBuilder(PromptTemplates templates)
             {
                 content = File.ReadAllText(path, System.Text.Encoding.UTF8);
             }
-            catch
+            catch (Exception ex)
             {
-                sb.AppendLine($"=== {filename} === (could not be read)");
+                // Degrade gracefully — the merge can still proceed without this partial.
+                // Log it and also surface the reason into the prompt (and thus the stream log).
+                logger.LogWarning(ex, "BuildSynthesisMergePrompt: could not read partial output {File}", path);
+                sb.AppendLine($"=== {filename} === (could not be read: {ex.Message})");
                 sb.AppendLine();
                 continue;
             }

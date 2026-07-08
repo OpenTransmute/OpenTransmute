@@ -5,8 +5,13 @@ using OpenTransmute.Models;
 
 namespace OpenTransmute.Cli.Commands;
 
+/// <summary>
+/// <c>implement</c> command — generates working code from a compose output spec by running an
+/// <see cref="OpenTransmute.Jobs.ImplementJob"/> through the orchestrator.
+/// </summary>
 internal static class ImplementCommand
 {
+    /// <summary>Builds the <c>implement</c> command, wiring its options and run action.</summary>
     internal static Command Build(IServiceProvider sp, CliSettings settings)
     {
         var cmd = new Command("implement", "Generate working code from a compose output spec file");
@@ -33,16 +38,16 @@ internal static class ImplementCommand
 
         cmd.SetAction(async (parseResult, ct) =>
         {
-            var specPath   = parseResult.GetValue(specArg)!;
-            var outputDir  = parseResult.GetValue(outputOpt);
-            var project    = parseResult.GetValue(projectOpt);
-            var orch       = parseResult.GetValue(orchOpt);
-            var apiKey     = parseResult.GetValue(apiKeyOpt)
+            string specPath = parseResult.GetValue(specArg)!;
+            string? outputDir = parseResult.GetValue(outputOpt);
+            string? project = parseResult.GetValue(projectOpt);
+            OrchestratorType? orch = parseResult.GetValue(orchOpt);
+            string? apiKey = parseResult.GetValue(apiKeyOpt)
                              ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY");
-            var endpoint   = parseResult.GetValue(endpointOpt);
-            var model      = parseResult.GetValue(modelOpt);
-            var maxTurns   = parseResult.GetValue(maxTurnsOpt);
-            var timeout    = parseResult.GetValue(timeoutOpt);
+            string? endpoint = parseResult.GetValue(endpointOpt);
+            string? model = parseResult.GetValue(modelOpt);
+            int? maxTurns = parseResult.GetValue(maxTurnsOpt);
+            int? timeout = parseResult.GetValue(timeoutOpt);
 
             if (!File.Exists(specPath))
             {
@@ -50,13 +55,10 @@ internal static class ImplementCommand
                 return 1;
             }
 
-            var orchestratorType = orch ?? settings.Orchestrator;
+            OrchestratorType orchestratorType = orch ?? settings.Orchestrator;
 
-            if (orchestratorType == OrchestratorType.OpenAI && string.IsNullOrWhiteSpace(apiKey))
-            {
-                Console.Error.WriteLine("Error: OpenAI API key is required. Pass --api-key or set OPENAI_API_KEY.");
+            if (!JobConsole.ValidateOpenAiKey(orchestratorType, apiKey))
                 return 1;
-            }
 
             string specContent = await File.ReadAllTextAsync(specPath, ct);
 
@@ -93,31 +95,11 @@ internal static class ImplementCommand
             Console.WriteLine($"Engine:       {orchestratorType}");
             Console.WriteLine();
 
-            int logCursor = 0;
-            var done = new TaskCompletionSource();
-
-            job.OnChanged += () =>
-            {
-                string[] snapshot = job.GetLogSnapshot();
-                while (logCursor < snapshot.Length)
-                    Console.WriteLine(snapshot[logCursor++]);
-                if (job.Status is JobStatus.Completed or JobStatus.Failed)
-                    done.TrySetResult();
-            };
-
-            await jobQueue.EnqueueAsync(job, ct);
-            await done.Task;
-
-            Console.WriteLine();
-            if (job.Status == JobStatus.Completed)
-            {
-                Console.WriteLine($"Completed in {job.TotalElapsed?.ToString(@"mm\:ss") ?? "??:??"}.");
+            await JobConsole.RunToCompletionAsync(job, t => jobQueue.EnqueueAsync(job, t), ct);
+            int exitCode = JobConsole.WriteVerdict(job);
+            if (exitCode == 0)
                 Console.WriteLine($"Output: {resolvedOutputDir}");
-                return 0;
-            }
-
-            Console.Error.WriteLine($"Failed: {job.ErrorMessage}");
-            return 1;
+            return exitCode;
         });
 
         return cmd;

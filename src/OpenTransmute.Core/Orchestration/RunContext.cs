@@ -30,6 +30,14 @@ public sealed class RunContext
     public string? Hints { get; }
 
     /// <summary>
+    /// Recommended Phase 3 component group-count range, sized to the codebase
+    /// (e.g. "10–15 groups (...)"). Set by the orchestrator before the discovery
+    /// prompt is built; substituted for the &lt;GroupCountGuidance&gt; token.
+    /// Null/empty falls back to the default range baked into the prompt.
+    /// </summary>
+    public string? GroupCountGuidance { get; set; }
+
+    /// <summary>
     /// filename (e.g. "00-index.md") → absolute path on disk.
     /// Populated after each phase completes. Used by PromptBuilder to tell the agent
     /// which prior files to read before responding.

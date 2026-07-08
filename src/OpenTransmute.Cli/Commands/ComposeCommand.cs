@@ -8,8 +8,13 @@ using OpenTransmute.Parsing;
 
 namespace OpenTransmute.Cli.Commands;
 
+/// <summary>
+/// <c>compose</c> command — builds a new system design from selected inventory items, driving a
+/// <see cref="OpenTransmute.Jobs.ComposeJob"/> through the orchestrator to completion.
+/// </summary>
 internal static class ComposeCommand
 {
+    /// <summary>Builds the <c>compose</c> command, wiring its options and run action.</summary>
     internal static Command Build(IServiceProvider sp, CliSettings settings)
     {
         var cmd = new Command("compose", "Compose a new system design from inventory items");
@@ -46,39 +51,36 @@ internal static class ComposeCommand
 
         cmd.SetAction(async (parseResult, ct) =>
         {
-            var outputName  = parseResult.GetValue(outputOpt);
+            string? outputName = parseResult.GetValue(outputOpt);
             if (string.IsNullOrWhiteSpace(outputName))
             {
                 Console.Error.WriteLine("Error: --output is required.");
                 return 1;
             }
-            var itemsRaw    = parseResult.GetValue(itemsOpt);
-            var category    = parseResult.GetValue(categoryOpt);
-            var projectName = parseResult.GetValue(projectOpt);
-            var description = parseResult.GetValue(descOpt);
-            var environment = parseResult.GetValue(envOpt);
-            var technology  = parseResult.GetValue(techOpt);
-            var orch        = parseResult.GetValue(orchOpt);
-            var apiKey      = parseResult.GetValue(apiKeyOpt)
+            string? itemsRaw = parseResult.GetValue(itemsOpt);
+            InventoryCategory? category = parseResult.GetValue(categoryOpt);
+            string? projectName = parseResult.GetValue(projectOpt);
+            string? description = parseResult.GetValue(descOpt);
+            string? environment = parseResult.GetValue(envOpt);
+            string? technology = parseResult.GetValue(techOpt);
+            OrchestratorType? orch = parseResult.GetValue(orchOpt);
+            string? apiKey = parseResult.GetValue(apiKeyOpt)
                               ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY");
-            var endpoint    = parseResult.GetValue(endpointOpt);
-            var model       = parseResult.GetValue(modelOpt);
-            var maxTokens   = parseResult.GetValue(maxTokensOpt);
-            var timeout     = parseResult.GetValue(timeoutOpt);
-            var hints       = parseResult.GetValue(hintsOpt) ?? settings.UserEthos;
+            string? endpoint = parseResult.GetValue(endpointOpt);
+            string? model = parseResult.GetValue(modelOpt);
+            int? maxTokens = parseResult.GetValue(maxTokensOpt);
+            int? timeout = parseResult.GetValue(timeoutOpt);
+            string? hints = parseResult.GetValue(hintsOpt) ?? settings.UserEthos;
 
-            var orchestratorType = orch ?? settings.Orchestrator;
+            OrchestratorType orchestratorType = orch ?? settings.Orchestrator;
 
-            if (orchestratorType == OrchestratorType.OpenAI && string.IsNullOrWhiteSpace(apiKey))
-            {
-                Console.Error.WriteLine("Error: OpenAI API key is required. Pass --api-key or set OPENAI_API_KEY.");
+            if (!JobConsole.ValidateOpenAiKey(orchestratorType, apiKey))
                 return 1;
-            }
 
             // Resolve inventory items from DB
             var dbFactory = sp.GetRequiredService<IDbContextFactory<AppDbContext>>();
             await using var db = await dbFactory.CreateDbContextAsync(ct);
-            var allItems = await db.InventoryItems.Include(i => i.Project).ToListAsync(ct);
+            List<InventoryItem> allItems = await db.InventoryItems.Include(i => i.Project).ToListAsync(ct);
 
             var selected = new List<InventoryItem>();
 
@@ -152,30 +154,8 @@ internal static class ComposeCommand
             Console.WriteLine($"Engine: {orchestratorType}");
             Console.WriteLine();
 
-            int logCursor = 0;
-            var done = new TaskCompletionSource();
-
-            job.OnChanged += () =>
-            {
-                string[] snapshot = job.GetLogSnapshot();
-                while (logCursor < snapshot.Length)
-                    Console.WriteLine(snapshot[logCursor++]);
-                if (job.Status is JobStatus.Completed or JobStatus.Failed)
-                    done.TrySetResult();
-            };
-
-            await jobQueue.EnqueueAsync(job, ct);
-            await done.Task;
-
-            Console.WriteLine();
-            if (job.Status == JobStatus.Completed)
-            {
-                Console.WriteLine($"Completed in {job.TotalElapsed?.ToString(@"mm\:ss") ?? "??:??"}.");
-                return 0;
-            }
-
-            Console.Error.WriteLine($"Failed: {job.ErrorMessage}");
-            return 1;
+            await JobConsole.RunToCompletionAsync(job, t => jobQueue.EnqueueAsync(job, t), ct);
+            return JobConsole.WriteVerdict(job);
         });
 
         return cmd;

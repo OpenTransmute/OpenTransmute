@@ -1,3 +1,5 @@
+using OpenTransmute.Models;
+
 namespace OpenTransmute.Llm;
 
 /// <summary>
@@ -62,6 +64,14 @@ public sealed class LlmExecutionContext
 
     /// <summary>Maximum output tokens. Zero means use the backend default.</summary>
     public int MaxOutputTokens { get; set; }
+
+    /// <summary>
+    /// Context-window tier. <see cref="LlmContextTier.Default"/> uses the backend default
+    /// (the Copilot CLI defaults to ~200k); <see cref="LlmContextTier.LongContext"/> requests
+    /// the model's expanded window. Only the Copilot SDK path honors this — it maps to the
+    /// create-session ContextTier parameter.
+    /// </summary>
+    public LlmContextTier ContextTier { get; set; }
 
     /// <summary>HTTP timeout applied to OpenAI-compatible calls. Default 10 minutes.</summary>
     public TimeSpan Timeout { get; set; } = TimeSpan.FromMinutes(10);

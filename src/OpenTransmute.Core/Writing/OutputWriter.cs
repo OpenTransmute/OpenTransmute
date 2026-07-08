@@ -9,28 +9,62 @@ public sealed class OutputWriter
     #region Methods
 
     /// <summary>
-    /// Strips any lines before the first Markdown heading (<c># </c>) from the content.
-    /// Catches model "thinking aloud" preamble that leaks into output (e.g.
-    /// "Now let me look at..." or "I now have enough information...").
-    /// Returns the content unchanged if no heading is found or the heading is already first.
+    /// Strips leading non-document preamble — the model's "thinking aloud" narration that
+    /// precedes the actual deliverable (e.g. "Now let me look at..." / "I now have enough
+    /// information...") — by skipping everything before the first Markdown ATX heading
+    /// (<c># </c> … <c>###### </c>) that appears at the START of a line and OUTSIDE any fenced
+    /// code block. Fence-awareness is the whole point: a YAML/shell comment like <c># Schema</c>
+    /// inside a <c>```</c> block must never be mistaken for the document start — that exact bug
+    /// truncated ~40% off a phase output once. Returns the content unchanged when no qualifying
+    /// heading is found, rather than discarding everything.
     /// </summary>
     public static string StripPreamble(string content)
     {
+        if (string.IsNullOrEmpty(content))
+            return content;
+
+        bool inFence = false;
         int idx = 0;
         while (idx < content.Length)
         {
-            // Check if this line starts with '# ' (H1 heading)
-            if (content[idx] == '#' && idx + 1 < content.Length && content[idx + 1] == ' ')
+            int nl = content.IndexOf('\n', idx);
+            int lineEnd = nl < 0 ? content.Length : nl;
+
+            // A fenced-code delimiter (``` or ~~~) toggles fence state. Headings and
+            // comments inside a fence are content, not the document start.
+            if (IsFenceLine(content, idx, lineEnd))
+                inFence = !inFence;
+            else if (!inFence && IsAtxHeadingLine(content, idx, lineEnd))
                 return content[idx..];
 
-            // Skip to next line
-            int nl = content.IndexOf('\n', idx);
             if (nl < 0) break;
             idx = nl + 1;
         }
 
-        // No heading found — return as-is rather than discarding everything
+        // No heading found — return as-is rather than discarding everything.
         return content;
+    }
+
+    /// <summary>True when line <c>[start, end)</c> is a fenced-code delimiter (≥3 backticks or tildes), ignoring leading whitespace.</summary>
+    private static bool IsFenceLine(string s, int start, int end)
+    {
+        int i = start;
+        while (i < end && (s[i] == ' ' || s[i] == '\t')) i++;
+        if (i >= end || (s[i] != '`' && s[i] != '~')) return false;
+
+        char marker = s[i];
+        int run = 0;
+        while (i < end && s[i] == marker) { i++; run++; }
+        return run >= 3;
+    }
+
+    /// <summary>True when line <c>[start, end)</c> begins with 1–6 '#' followed by a space — a Markdown ATX heading.</summary>
+    private static bool IsAtxHeadingLine(string s, int start, int end)
+    {
+        int i = start;
+        int hashes = 0;
+        while (i < end && s[i] == '#') { i++; hashes++; }
+        return hashes >= 1 && hashes <= 6 && i < end && s[i] == ' ';
     }
 
     /// <summary>

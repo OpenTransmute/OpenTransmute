@@ -34,6 +34,7 @@ public sealed class UserSettingsService(
         llmSettings.ThickMaxOutputTokens   = stored.ThickMaxOutputTokens;
         llmSettings.RegularMaxOutputTokens = stored.RegularMaxOutputTokens;
         llmSettings.ThinMaxOutputTokens    = stored.ThinMaxOutputTokens;
+        llmSettings.ContextTier            = stored.ContextTier;
         llmSettings.UserEthos              = stored.UserEthos;
     }
 
@@ -63,6 +64,7 @@ public sealed class UserSettingsService(
         stored.ThickMaxOutputTokens   = llmSettings.ThickMaxOutputTokens;
         stored.RegularMaxOutputTokens = llmSettings.RegularMaxOutputTokens;
         stored.ThinMaxOutputTokens    = llmSettings.ThinMaxOutputTokens;
+        stored.ContextTier            = llmSettings.ContextTier;
         stored.UserEthos              = string.IsNullOrWhiteSpace(llmSettings.UserEthos)
                                         ? null
                                         : llmSettings.UserEthos.Trim();

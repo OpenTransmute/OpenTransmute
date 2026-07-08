@@ -173,8 +173,8 @@
                     </MudItem>
                     <MudItem xs="12" sm="4">
                         <MudNumericField @bind-Value="Llm.MaxOutputTokens" Label="Max Output Tokens (override)"
-                                         Min="0" Max="131072"
-                                         HelperText="0 = use per-weight defaults below. No effect for Claude Code." />
+                                         Min="0" Max="1000000" Step="4096"
+                                         HelperText="0 = use per-weight defaults below. Nonzero applies to all phases. No effect for Claude Code." />
                     </MudItem>
                     <MudItem xs="12" sm="4">
                         <MudNumericField @bind-Value="Llm.TimeoutMinutes" Label="HTTP Timeout (min)"
@@ -184,18 +184,25 @@
                     </MudItem>
                     <MudItem xs="12" sm="4">
                         <MudNumericField @bind-Value="Llm.ThickMaxOutputTokens" Label="Thick Max Tokens"
-                                         Min="1024" Max="131072"
-                                         HelperText="Heavy phases (Phase 3 specs)" />
+                                         Min="1024" Max="1000000" Step="4096"
+                                         HelperText="Heavy phases (Phase 3 specs). Raise for 1M-token models." />
                     </MudItem>
                     <MudItem xs="12" sm="4">
                         <MudNumericField @bind-Value="Llm.RegularMaxOutputTokens" Label="Regular Max Tokens"
-                                         Min="1024" Max="131072"
+                                         Min="1024" Max="1000000" Step="4096"
                                          HelperText="Normal-weight phases" />
                     </MudItem>
                     <MudItem xs="12" sm="4">
                         <MudNumericField @bind-Value="Llm.ThinMaxOutputTokens" Label="Thin Max Tokens"
-                                         Min="1024" Max="131072"
+                                         Min="1024" Max="1000000" Step="4096"
                                          HelperText="Light phases" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudSelect T="LlmContextTier" @bind-Value="Llm.ContextTier" Label="Context Tier (Copilot CLI)"
+                                   HelperText="Long Context unlocks a model's expanded window (e.g. 1M on Claude Opus). No effect for Claude/OpenAI.">
+                            <MudSelectItem T="LlmContextTier" Value="LlmContextTier.Default">Default (~200k)</MudSelectItem>
+                            <MudSelectItem T="LlmContextTier" Value="LlmContextTier.LongContext">Long Context</MudSelectItem>
+                        </MudSelect>
                     </MudItem>
                 </MudGrid>
             </MudCardContent>

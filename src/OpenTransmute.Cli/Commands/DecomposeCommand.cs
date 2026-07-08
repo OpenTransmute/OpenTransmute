@@ -5,8 +5,13 @@ using OpenTransmute.Models;
 
 namespace OpenTransmute.Cli.Commands;
 
+/// <summary>
+/// <c>decompose</c> command — reduces a codebase to a language-agnostic specification by running a
+/// <see cref="OpenTransmute.Jobs.DecomposeJob"/> through the multi-phase orchestrator.
+/// </summary>
 internal static class DecomposeCommand
 {
+    /// <summary>Builds the <c>decompose</c> command, wiring its options and run action.</summary>
     internal static Command Build(IServiceProvider sp, CliSettings settings)
     {
         var cmd = new Command("decompose", "Decompose a codebase into a language-agnostic specification");
@@ -47,31 +52,28 @@ internal static class DecomposeCommand
 
         cmd.SetAction(async (parseResult, ct) =>
         {
-            var source    = parseResult.GetValue(sourceArg)!;
-            var project   = parseResult.GetValue(projectOpt);
-            var start     = parseResult.GetValue(startOpt);
-            var startItem = parseResult.GetValue(startItemOpt);
-            var end       = parseResult.GetValue(endOpt);
-            var orch      = parseResult.GetValue(orchOpt);
-            var apiKey    = parseResult.GetValue(apiKeyOpt)
+            string source = parseResult.GetValue(sourceArg)!;
+            string? project = parseResult.GetValue(projectOpt);
+            int start = parseResult.GetValue(startOpt);
+            int? startItem = parseResult.GetValue(startItemOpt);
+            int? end = parseResult.GetValue(endOpt);
+            OrchestratorType? orch = parseResult.GetValue(orchOpt);
+            string? apiKey = parseResult.GetValue(apiKeyOpt)
                             ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY");
-            var endpoint  = parseResult.GetValue(endpointOpt);
-            var thick     = parseResult.GetValue(thickOpt);
-            var regular   = parseResult.GetValue(regularOpt);
-            var thin      = parseResult.GetValue(thinOpt);
-            var maxTurns  = parseResult.GetValue(maxTurnsOpt);
-            var maxTokens = parseResult.GetValue(maxTokensOpt);
-            var keepClone = parseResult.GetValue(keepCloneOpt);
-            var hints     = parseResult.GetValue(hintsOpt);
-            var appendResults = parseResult.GetValue(appendResultsOpt);
+            string? endpoint = parseResult.GetValue(endpointOpt);
+            string? thick = parseResult.GetValue(thickOpt);
+            string? regular = parseResult.GetValue(regularOpt);
+            string? thin = parseResult.GetValue(thinOpt);
+            int? maxTurns = parseResult.GetValue(maxTurnsOpt);
+            int? maxTokens = parseResult.GetValue(maxTokensOpt);
+            bool keepClone = parseResult.GetValue(keepCloneOpt);
+            string? hints = parseResult.GetValue(hintsOpt);
+            bool? appendResults = parseResult.GetValue(appendResultsOpt);
 
-            var orchestratorType = orch ?? settings.Orchestrator;
+            OrchestratorType orchestratorType = orch ?? settings.Orchestrator;
 
-            if (orchestratorType == OrchestratorType.OpenAI && string.IsNullOrWhiteSpace(apiKey))
-            {
-                Console.Error.WriteLine("Error: OpenAI API key is required. Pass --api-key or set OPENAI_API_KEY.");
+            if (!JobConsole.ValidateOpenAiKey(orchestratorType, apiKey))
                 return 1;
-            }
 
             var options = new DecomposeOptions
             {
@@ -113,30 +115,8 @@ internal static class DecomposeCommand
                 Console.WriteLine($"Model:       {options.RegularModel}");
             Console.WriteLine();
 
-            int logCursor = 0;
-            var done = new TaskCompletionSource();
-
-            job.OnChanged += () =>
-            {
-                var snapshot = job.GetLogSnapshot();
-                while (logCursor < snapshot.Length)
-                    Console.WriteLine(snapshot[logCursor++]);
-                if (job.Status is JobStatus.Completed or JobStatus.Failed)
-                    done.TrySetResult();
-            };
-
-            await jobQueue.EnqueueAsync(job, ct);
-            await done.Task;
-
-            Console.WriteLine();
-            if (job.Status == JobStatus.Completed)
-            {
-                Console.WriteLine($"Completed in {job.TotalElapsed?.ToString(@"mm\:ss") ?? "??:??"}.");
-                return 0;
-            }
-
-            Console.Error.WriteLine($"Failed: {job.ErrorMessage}");
-            return 1;
+            await JobConsole.RunToCompletionAsync(job, t => jobQueue.EnqueueAsync(job, t), ct);
+            return JobConsole.WriteVerdict(job);
         });
 
         return cmd;

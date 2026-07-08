@@ -10,9 +10,14 @@ public sealed class PhaseSpec
 {
     #region Properties
 
-    public int    Number      { get; init; }
-    public string Title       { get; init; } = string.Empty;
-    public string Goal        { get; init; } = string.Empty;
+    /// <summary>Phase number (0-based) as written in decompose.md.</summary>
+    public int Number { get; init; }
+
+    /// <summary>Phase title, used for display and to derive the output filename.</summary>
+    public string Title { get; init; } = string.Empty;
+
+    /// <summary>One-line statement of what the phase is meant to accomplish.</summary>
+    public string Goal { get; init; } = string.Empty;
 
     /// <summary>"normal", "thick", or "thin" — maps to model selection for OpenAI-compatible backends.</summary>
     public string ModelWeight { get; init; } = "normal";
@@ -47,11 +52,20 @@ public sealed class PhaseSpec
 
     // ── Expansion phase (Phase 3) ─────────────────────────────────────────────
 
-    public bool    IsExpansion      { get; init; }
-    public string? ExpansionType    { get; init; }   // e.g. "json-array"
-    public string? OutputPattern    { get; init; }   // e.g. "codeMap/<project>/03-{index:00}-{slug}.md"
-    public string? DiscoveryPrompt  { get; init; }   // first code block — generates the item list
-    public string? TemplatePrompt   { get; init; }   // second code block — run once per item
+    /// <summary>True when this phase fans out over a generated item list (Phase 3 style).</summary>
+    public bool IsExpansion { get; init; }
+
+    /// <summary>Expansion item-list format, e.g. "json-array".</summary>
+    public string? ExpansionType { get; init; }
+
+    /// <summary>Output path pattern per item, e.g. "codeMap/&lt;project&gt;/03-{index:00}-{slug}.md".</summary>
+    public string? OutputPattern { get; init; }
+
+    /// <summary>First code block — generates the item list.</summary>
+    public string? DiscoveryPrompt { get; init; }
+
+    /// <summary>Second code block — run once per item.</summary>
+    public string? TemplatePrompt { get; init; }
 
     // ── Synthesis phase (Phase 6) ─────────────────────────────────────────────
 

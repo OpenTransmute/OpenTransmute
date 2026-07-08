@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenTransmute.Data;
+using OpenTransmute.Exploration;
 using OpenTransmute.Filtering;
 using OpenTransmute.Inventory;
 using OpenTransmute.Jobs;
@@ -63,9 +64,12 @@ public static class ServiceRegistration
         services.AddSingleton<PromptBuilder>();
         services.AddSingleton<OutputWriter>();
         services.AddSingleton<JobOrchestrator>();
+        services.AddSingleton<FixService>();
 
         // Supporting services
         services.AddSingleton<SourceFileFilter>();
+        services.AddSingleton<ProjectExplorer>();
+        services.AddSingleton<RepoClusterer>();
         services.AddSingleton<InventoryParser>();
         services.AddSingleton<InventoryExporter>();
 

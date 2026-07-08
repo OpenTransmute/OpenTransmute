@@ -115,5 +115,35 @@ public class DecomposeJob : JobBase
         NotifyChanged();
     }
 
+    /// <summary>
+    /// Forcibly returns a wedged job to a clean, re-runnable Failed state. Signals cancellation
+    /// to any lingering execution, stops any phase stuck in <see cref="JobStatus.Running"/>
+    /// (clearing its spinner), and marks the job Failed regardless of its current status.
+    /// Unlike <see cref="JobBase.ForceFail"/>, this works even when the job already shows Failed —
+    /// the exact situation where output was deleted mid-run and a phase keeps spinning.
+    /// Completed phases are preserved so a re-run can resume from where it left off.
+    /// </summary>
+    public void Reset()
+    {
+        // Signal cancellation in case a stale token/task is still linked to this job.
+        Abort();
+
+        foreach (PhaseProgress phase in Phases)
+        {
+            if (phase.Status is JobStatus.Running)
+            {
+                phase.Status = JobStatus.Failed;
+                phase.CompletedAt ??= DateTime.UtcNow;
+                phase.ErrorMessage ??= "Reset by user.";
+            }
+        }
+
+        Status = JobStatus.Failed;
+        CompletedAt ??= DateTime.UtcNow;
+        ErrorMessage = "Reset by user.";
+        AppendLog("Job reset by user — stuck phases cleared; ready to re-run.");
+        NotifyChanged();
+    }
+
     #endregion
 }

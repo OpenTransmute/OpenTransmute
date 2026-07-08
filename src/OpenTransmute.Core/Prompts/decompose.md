@@ -216,8 +216,8 @@ name the files that implement it, and write one sentence on its role.
 
 Then assemble the subsystems into thematic groups (e.g. "plugin system",
 "theme system", "core library utilities", "CLI interface").  Each group
-will become one spec document.  Aim for 3–8 groups — too few means files
-become unwieldy; too many means the reader loses the thread.
+will become one spec document.  Aim for <GroupCountGuidance> — too few means
+files become unwieldy; too many means the reader loses the thread.
 
 OUTPUT RULE: Respond with a raw JSON array only. No prose. No markdown. No code fence.
 Your entire response must be parseable by JSON.parse().

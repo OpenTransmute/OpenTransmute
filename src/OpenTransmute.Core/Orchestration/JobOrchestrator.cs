@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using OpenTransmute.Data;
+using OpenTransmute.Filtering;
 using OpenTransmute.Inventory;
 using OpenTransmute.Jobs;
 using OpenTransmute.Llm;
@@ -22,6 +23,7 @@ public sealed class JobOrchestrator(
     PromptTemplates promptTemplates,
     PromptBuilder promptBuilder,
     OutputWriter outputWriter,
+    SourceFileFilter sourceFileFilter,
     IEnumerable<ILlmExecutor> executors,
     IDbContextFactory<AppDbContext> dbFactory,
     ILogger<JobOrchestrator> logger)
@@ -122,6 +124,41 @@ public sealed class JobOrchestrator(
         }
     }
 
+    /// <summary>
+    /// Sizes the filtered source tree (the same file set the mapper sees) and maps the
+    /// total to a recommended Phase 3 component group-count range. Larger codebases get
+    /// more groups so each component spec stays small enough to be documented in depth.
+    /// Falls back to the default range if sizing fails for any reason.
+    /// </summary>
+    private string ComputeGroupCountGuidance(string sourcePath)
+    {
+        long totalBytes = 0;
+        try
+        {
+            foreach ((string _, string absolutePath) in sourceFileFilter.Apply(sourcePath))
+            {
+                try { totalBytes += new FileInfo(absolutePath).Length; }
+                catch { /* unreadable file — skip, it won't be mapped anyway */ }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning("Group-count sizing failed for {Path}: {Msg}. Using default range.", sourcePath, ex.Message);
+            return "3–8 groups";
+        }
+
+        double megabytes = totalBytes / (1024.0 * 1024.0);
+        (string range, string tier) = megabytes switch
+        {
+            <= 200  => ("3–8 groups",   "small"),
+            <= 500  => ("5–10 groups",  "medium"),
+            <= 800  => ("10–15 groups", "large"),
+            <= 1200 => ("15–20 groups", "very large"),
+            _       => ("20–30 groups", "massive")
+        };
+        return $"{range} (this is a {tier} codebase — ~{megabytes:N0} MB of source)";
+    }
+
     private async IAsyncEnumerable<PhaseEvent> RunDecomposeSimplePhaseAsync(
         PhaseSpec phase, RunContext context, DecomposeOptions options, ILlmExecutor executor,
         [EnumeratorCancellation] CancellationToken ct)
@@ -151,13 +188,8 @@ public sealed class JobOrchestrator(
         (string? output, TokenUsage tokens, IReadOnlyList<string> lines, string? error) =
             await RunLlmCallWithRetryAsync(ctx, executor, ct);
 
-        foreach (string line in lines)
-            yield return new LogLine(phase.Number, line);
-
-        if (tokens.Total > 0)
-            yield return new LogLine(phase.Number,
-                $"Phase {phase.Number}: {tokens.Total:N0} tokens" +
-                (tokens.CostUsd.HasValue ? $" (~${tokens.CostUsd:F4})" : string.Empty));
+        foreach (PhaseEvent evt in EmitCallOutput(phase.Number, lines, tokens, $"Phase {phase.Number}"))
+            yield return evt;
 
         if (error is not null)
         {
@@ -171,28 +203,7 @@ public sealed class JobOrchestrator(
         string? saveError = null;
         try
         {
-            // If the model wrote the file directly, verify it exists and use it.
-            if (directWritePath is not null && File.Exists(directWritePath) &&
-                new FileInfo(directWritePath).Length > 0)
-            {
-                outputPath = directWritePath;
-
-                // Strip any model preamble that leaked into the direct-write file.
-                string raw = await File.ReadAllTextAsync(directWritePath, ct);
-                string stripped = OutputWriter.StripPreamble(raw);
-                if (stripped.Length != raw.Length)
-                    await File.WriteAllTextAsync(directWritePath, stripped, new System.Text.UTF8Encoding(false), ct);
-
-                logger.LogInformation("Phase {N}: model wrote directly to {Path}", phase.Number, outputPath);
-            }
-            else
-            {
-                // Fall back to saving the text output (OpenAI/Ollama, or direct write failed).
-                outputPath = await outputWriter.WriteAsync(
-                    options.OutputRoot, options.ProjectName, phase.OutputFilename,
-                    output!.TrimEnd(), ct);
-            }
-
+            outputPath = await ResolveAndSaveOutputAsync(directWritePath, phase.OutputFilename, output!, options, ct);
             context.PriorOutputPaths[phase.OutputFilename] = outputPath;
             logger.LogInformation("Phase {N}: saved {Path}", phase.Number, outputPath);
         }
@@ -233,6 +244,11 @@ public sealed class JobOrchestrator(
         {
             yield return new LogLine(phase.Number, $"Phase {phase.Number}: identifying groups...");
 
+            // Size the codebase so discovery is told how many component groups to aim for.
+            // Large repos need finer segmentation than the default 3–8 range.
+            context.GroupCountGuidance = ComputeGroupCountGuidance(context.SourcePath);
+            yield return new LogLine(phase.Number, $"Phase {phase.Number}: target {context.GroupCountGuidance}");
+
             // Step 1 — discovery
             string discoveryPrompt = promptBuilder.BuildExpansionDiscoveryPrompt(phase, context);
             LlmExecutionContext discoveryCtx = BuildDecomposeContext(phase, discoveryPrompt, options, context.SourcePath,
@@ -243,13 +259,8 @@ public sealed class JobOrchestrator(
             (discoveryOutput, discoveryTokens, discoveryLines, discoveryError) =
                 await RunLlmCallWithRetryAsync(discoveryCtx, executor, ct);
 
-            foreach (string line in discoveryLines)
-                yield return new LogLine(phase.Number, line);
-
-            if (discoveryTokens.Total > 0)
-                yield return new LogLine(phase.Number,
-                    $"Phase {phase.Number} discovery: {discoveryTokens.Total:N0} tokens" +
-                    (discoveryTokens.CostUsd.HasValue ? $" (~${discoveryTokens.CostUsd:F4})" : string.Empty));
+            foreach (PhaseEvent evt in EmitCallOutput(phase.Number, discoveryLines, discoveryTokens, $"Phase {phase.Number} discovery"))
+                yield return evt;
 
             if (discoveryError is not null)
             {
@@ -316,76 +327,74 @@ public sealed class JobOrchestrator(
                 continue;
             }
 
-            yield return new ExpansionItemStarted(phase.Number, index, itemName);
+            await foreach (PhaseEvent evt in RunDecomposeExpansionItemAsync(
+                phase, context, options, executor, item, itemName, index, expansionBasePaths, ct))
+                yield return evt;
 
-            string filename = ResolveExpansionFilename(phase, index, itemName, options.ProjectName, string.Empty);
-
-            // Agentic backends can write the expansion spec directly to the output file.
-            string? itemDirectWritePath = SupportsDirectWrite(options.ResolveOrchestrator(phase.Number))
-                ? outputWriter.GetPath(options.OutputRoot, options.ProjectName, filename)
-                : null;
-
-            string itemPrompt = promptBuilder.BuildExpansionItemPrompt(phase, context, item, expansionBasePaths);
-            LlmExecutionContext itemCtx = BuildDecomposeContext(phase, itemPrompt, options, context.SourcePath, itemDirectWritePath,
-                $"phase-{phase.Number:D2}-{index:D2}");
-
-            (string? itemOutput, TokenUsage itemTokens, IReadOnlyList<string> itemLines, string? itemError) =
-                await RunLlmCallWithRetryAsync(itemCtx, executor, ct);
-
-            foreach (string line in itemLines)
-                yield return new LogLine(phase.Number, line);
-
-            if (itemTokens.Total > 0)
-                yield return new LogLine(phase.Number,
-                    $"  Group '{itemName}': {itemTokens.Total:N0} tokens" +
-                    (itemTokens.CostUsd.HasValue ? $" (~${itemTokens.CostUsd:F4})" : string.Empty));
-
-            if (itemError is not null)
-            {
-                context.LastFailed = true;
-                yield return new PhaseFailed(phase.Number, $"Group '{itemName}': {itemError}");
-                yield break;
-            }
-
-            string? itemOutputPath = null;
-            string? itemSaveError = null;
-            try
-            {
-                // If the model wrote the file directly, verify and use it.
-                if (itemDirectWritePath is not null && File.Exists(itemDirectWritePath) &&
-                    new FileInfo(itemDirectWritePath).Length > 0)
-                {
-                    itemOutputPath = itemDirectWritePath;
-
-                    // Strip any model preamble that leaked into the direct-write file.
-                    string raw = await File.ReadAllTextAsync(itemDirectWritePath, ct);
-                    string stripped = OutputWriter.StripPreamble(raw);
-                    if (stripped.Length != raw.Length)
-                        await File.WriteAllTextAsync(itemDirectWritePath, stripped, new System.Text.UTF8Encoding(false), ct);
-                }
-                else
-                {
-                    itemOutputPath = await outputWriter.WriteAsync(
-                        options.OutputRoot, options.ProjectName, filename, itemOutput!.TrimEnd(), ct);
-                }
-                context.PriorOutputPaths[Path.GetFileName(itemOutputPath)] = itemOutputPath;
-            }
-            catch (Exception ex) when (!ct.IsCancellationRequested)
-            {
-                itemSaveError = ex.Message;
-            }
-
-            if (itemSaveError is not null)
-            {
-                context.LastFailed = true;
-                yield return new PhaseFailed(phase.Number, $"Group '{itemName}' save failed: {itemSaveError}");
-                yield break;
-            }
-
-            yield return new ExpansionItemCompleted(phase.Number, index, itemOutputPath!, itemTokens);
+            if (context.LastFailed) yield break;
         }
 
         yield return new PhaseCompleted(phase.Number, null, discoveryTokens);
+    }
+
+    /// <summary>
+    /// Runs a single expansion item: builds and executes the item prompt, emits its log and token
+    /// lines, and persists the resulting spec. On failure, sets <see cref="RunContext.LastFailed"/>
+    /// and yields a <see cref="PhaseFailed"/> so the caller can stop the phase.
+    /// </summary>
+    private async IAsyncEnumerable<PhaseEvent> RunDecomposeExpansionItemAsync(
+        PhaseSpec phase, RunContext context, DecomposeOptions options, ILlmExecutor executor,
+        JsonElement item, string itemName, int index,
+        IReadOnlyDictionary<string, string> expansionBasePaths,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        yield return new ExpansionItemStarted(phase.Number, index, itemName);
+
+        string filename = ResolveExpansionFilename(phase, index, itemName, options.ProjectName, string.Empty);
+
+        // Agentic backends can write the expansion spec directly to the output file.
+        string? itemDirectWritePath = SupportsDirectWrite(options.ResolveOrchestrator(phase.Number))
+            ? outputWriter.GetPath(options.OutputRoot, options.ProjectName, filename)
+            : null;
+
+        string itemPrompt = promptBuilder.BuildExpansionItemPrompt(phase, context, item, expansionBasePaths);
+        LlmExecutionContext itemCtx = BuildDecomposeContext(phase, itemPrompt, options, context.SourcePath, itemDirectWritePath,
+            $"phase-{phase.Number:D2}-{index:D2}");
+
+        (string? itemOutput, TokenUsage itemTokens, IReadOnlyList<string> itemLines, string? itemError) =
+            await RunLlmCallWithRetryAsync(itemCtx, executor, ct);
+
+        foreach (PhaseEvent evt in EmitCallOutput(phase.Number, itemLines, itemTokens, $"  Group '{itemName}'"))
+            yield return evt;
+
+        if (itemError is not null)
+        {
+            context.LastFailed = true;
+            yield return new PhaseFailed(phase.Number, $"Group '{itemName}': {itemError}");
+            yield break;
+        }
+
+        string? itemOutputPath = null;
+        string? itemSaveError = null;
+        try
+        {
+            itemOutputPath = await ResolveAndSaveOutputAsync(itemDirectWritePath, filename, itemOutput!, options, ct);
+            context.PriorOutputPaths[Path.GetFileName(itemOutputPath)] = itemOutputPath;
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            logger.LogError(ex, "Phase {N}: failed to save group '{Group}'", phase.Number, itemName);
+            itemSaveError = ex.Message;
+        }
+
+        if (itemSaveError is not null)
+        {
+            context.LastFailed = true;
+            yield return new PhaseFailed(phase.Number, $"Group '{itemName}' save failed: {itemSaveError}");
+            yield break;
+        }
+
+        yield return new ExpansionItemCompleted(phase.Number, index, itemOutputPath!, itemTokens);
     }
 
     // ── Synthesis ─────────────────────────────────────────────────────────────
@@ -428,6 +437,7 @@ public sealed class JobOrchestrator(
 
         if (parseError is not null)
         {
+            logger.LogError("Phase {N}: synthesis discovery JSON parse failed: {Err}", phase.Number, parseError);
             context.LastFailed = true;
             yield return new PhaseFailed(phase.Number,
                 $"Discovery JSON parse failed: {parseError}");
@@ -496,17 +506,15 @@ public sealed class JobOrchestrator(
                 yield return new LogLine(phase.Number, line);
 
             if (chunkTokens.Total > 0)
-            {
                 totalTokens = new TokenUsage(
                     totalTokens.InputTokens + chunkTokens.InputTokens,
                     totalTokens.OutputTokens + chunkTokens.OutputTokens,
                     totalTokens.CostUsd.HasValue || chunkTokens.CostUsd.HasValue
                         ? (totalTokens.CostUsd ?? 0) + (chunkTokens.CostUsd ?? 0)
                         : null);
-                yield return new LogLine(phase.Number,
-                    $"  Group '{itemName}': {chunkTokens.Total:N0} tokens" +
-                    (chunkTokens.CostUsd.HasValue ? $" (~${chunkTokens.CostUsd:F4})" : string.Empty));
-            }
+
+            foreach (PhaseEvent evt in EmitCallOutput(phase.Number, System.Array.Empty<string>(), chunkTokens, $"  Group '{itemName}'"))
+                yield return evt;
 
             if (chunkError is not null)
             {
@@ -566,17 +574,15 @@ public sealed class JobOrchestrator(
             yield return new LogLine(phase.Number, line);
 
         if (mergeTokens.Total > 0)
-        {
             totalTokens = new TokenUsage(
                 totalTokens.InputTokens + mergeTokens.InputTokens,
                 totalTokens.OutputTokens + mergeTokens.OutputTokens,
                 totalTokens.CostUsd.HasValue || mergeTokens.CostUsd.HasValue
                     ? (totalTokens.CostUsd ?? 0) + (mergeTokens.CostUsd ?? 0)
                     : null);
-            yield return new LogLine(phase.Number,
-                $"Phase {phase.Number} merge: {mergeTokens.Total:N0} tokens" +
-                (mergeTokens.CostUsd.HasValue ? $" (~${mergeTokens.CostUsd:F4})" : string.Empty));
-        }
+
+        foreach (PhaseEvent evt in EmitCallOutput(phase.Number, System.Array.Empty<string>(), mergeTokens, $"Phase {phase.Number} merge"))
+            yield return evt;
 
         if (mergeError is not null)
         {
@@ -678,8 +684,8 @@ public sealed class JobOrchestrator(
         (string? output, TokenUsage tokens, IReadOnlyList<string> lines, string? error) =
             await RunLlmCallWithRetryAsync(ctx, executor, ct);
 
-        foreach (string line in lines)
-            yield return new LogLine(PhaseNum, line);
+        foreach (PhaseEvent evt in EmitCallOutput(PhaseNum, lines, tokens, tokenLabel: null))
+            yield return evt;
 
         if (error is not null)
         {
@@ -822,8 +828,8 @@ public sealed class JobOrchestrator(
         (string? output, TokenUsage tokens, IReadOnlyList<string> lines, string? error) =
             await RunLlmCallWithRetryAsync(ctx, executor, ct);
 
-        foreach (string line in lines)
-            yield return new LogLine(PhaseNum, line);
+        foreach (PhaseEvent evt in EmitCallOutput(PhaseNum, lines, tokens, tokenLabel: null))
+            yield return evt;
 
         if (error is not null)
         {
@@ -952,128 +958,9 @@ public sealed class JobOrchestrator(
         {
             ct.ThrowIfCancellationRequested();
 
-            string mdPath = mdFiles[i];
-            string docName = Path.GetFileName(mdPath);
-
-            yield return new PhaseStarted(i, docName);
-            job.DocumentStarted(i);
-            job.AppendLog($"--- Verifying: {docName} ---");
-
-            // Read the document content and inject it into the prompt.
-            string? documentContent = null;
-            string? readError = null;
-            try
-            {
-                documentContent = await File.ReadAllTextAsync(mdPath, ct);
-            }
-            catch (Exception ex) when (!ct.IsCancellationRequested)
-            {
-                readError = ex.Message;
-            }
-
-            if (readError is not null)
-            {
-                job.DocumentFailed(i, readError);
-                yield return new PhaseFailed(i, $"Failed to read {docName}: {readError}");
-                continue;
-            }
-
-            string prompt = verifyPrompt
-                .Replace("<path>", options.SourcePath)
-                .Replace("<document>", docName);
-
-            // Structure: JSON instruction FIRST → document content → audit instructions → reminder.
-            // Models lose track of early instructions when a huge document is in the middle.
-            // Sandwiching the document between format instructions forces compliance.
-            prompt = "CRITICAL: Your ENTIRE response must be a single JSON object. " +
-                     "Start with { and end with }. No markdown. No code fences. No preamble. " +
-                     "No thinking aloud. No sign-off. ONLY the JSON object.\n\n" +
-                     $"## Document Under Audit: {docName}\n\n" +
-                     $"```markdown\n{documentContent}\n```\n\n---\n\n{prompt}" +
-                     "\n\nFINAL REMINDER: Output ONLY a JSON object. Start with { and end with }. " +
-                     "Any non-JSON text in your response will cause a parse failure.";
-
-            if (!string.IsNullOrWhiteSpace(options.Hints))
-                prompt += $"\n\n---\n\n### Additional Audit Focus\n\n{options.Hints.Trim()}";
-
-            LlmExecutionContext ctx = BuildVerifyContext(prompt, options);
-
-            (string? output, TokenUsage tokens, IReadOnlyList<string> lines, string? error) =
-                await RunLlmCallWithRetryAsync(ctx, executor, ct);
-
-            foreach (string line in lines)
-                yield return new LogLine(i, line);
-
-            if (tokens.Total > 0)
-                yield return new LogLine(i,
-                    $"Verify {docName}: {tokens.Total:N0} tokens" +
-                    (tokens.CostUsd.HasValue ? $" (~${tokens.CostUsd:F4})" : string.Empty));
-
-            if (error is not null)
-            {
-                job.DocumentFailed(i, error);
-                job.AppendLog($"Verify {docName} FAILED: {error}");
-                yield return new PhaseFailed(i, error);
-                continue; // Don't abort the whole run — keep verifying remaining documents.
-            }
-
-            // Save the verification report as JSON only. Render to markdown on-demand in the UI.
-            string? outputPath = null;
-            string? saveError = null;
-            string? jsonParseWarning = null;
-            try
-            {
-                string jsonBaseName = $"verify-{Path.GetFileNameWithoutExtension(docName)}.json";
-                string jsonPath = Path.Combine(verifyDir, jsonBaseName);
-
-                string raw = output!.TrimEnd();
-
-                // Extract JSON from the LLM output — strip code fences or preamble.
-                VerifyReport? report = ParseVerifyJson(raw, out string? parseError);
-
-                if (report is null)
-                {
-                    // JSON parse failed — save raw output as .md fallback so nothing is lost.
-                    string mdFallback = $"verify-{docName}";
-                    outputPath = Path.Combine(verifyDir, mdFallback);
-                    string fallback = OutputWriter.StripPreamble(raw);
-                    await File.WriteAllTextAsync(outputPath, fallback,
-                        new System.Text.UTF8Encoding(false), ct);
-                    job.AppendLog($"Warning: JSON parse failed for {docName}: {parseError}");
-                    jsonParseWarning = $"Warning: JSON parse failed — saved raw output as markdown. {parseError}";
-                }
-                else
-                {
-                    // Recompute header from actual claims — the model cannot be trusted to count.
-                    report.Document = docName;
-                    report.RecomputeHeader();
-
-                    // Save structured JSON (source of truth for everything).
-                    outputPath = jsonPath;
-                    string prettyJson = JsonSerializer.Serialize(report, _verifyJsonOptions);
-                    await File.WriteAllTextAsync(jsonPath, prettyJson,
-                        new System.Text.UTF8Encoding(false), ct);
-                }
-            }
-            catch (Exception ex) when (!ct.IsCancellationRequested)
-            {
-                saveError = ex.Message;
-            }
-
-            if (jsonParseWarning is not null)
-                yield return new LogLine(i, jsonParseWarning);
-
-            if (saveError is not null)
-            {
-                job.DocumentFailed(i, $"Save failed: {saveError}");
-                yield return new PhaseFailed(i, saveError);
-                continue;
-            }
-
-            string preview = output!.Length > 500 ? output[..500] + "…" : output;
-            job.DocumentCompleted(i, outputPath, preview, tokens);
-            job.AppendLog($"Verify {docName} completed → {Path.GetFileName(outputPath!)}");
-            yield return new PhaseCompleted(i, outputPath, tokens);
+            await foreach (PhaseEvent evt in RunVerifyDocumentAsync(
+                job, options, executor, verifyPrompt, verifyDir, mdFiles[i], i, ct))
+                yield return evt;
         }
 
         // ── Rollup + Remediation ──────────────────────────────────────────────
@@ -1104,6 +991,135 @@ public sealed class JobOrchestrator(
 
         await foreach (PhaseEvent evt in RunVerifyRollupAsync(job, reportPaths, verifyDir, decompDir, ct))
             yield return evt;
+    }
+
+    /// <summary>
+    /// Verifies a single decomposition document against the original source and persists the audit
+    /// report (structured JSON, or a markdown fallback when the model's JSON cannot be parsed).
+    /// Document failures are isolated — they yield a <see cref="PhaseFailed"/> for this document only
+    /// and never abort the surrounding run.
+    /// </summary>
+    private async IAsyncEnumerable<PhaseEvent> RunVerifyDocumentAsync(
+        VerifyJob job, VerifyOptions options, ILlmExecutor executor, string verifyPrompt,
+        string verifyDir, string mdPath, int index,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        string docName = Path.GetFileName(mdPath);
+
+        yield return new PhaseStarted(index, docName);
+        job.DocumentStarted(index);
+        job.AppendLog($"--- Verifying: {docName} ---");
+
+        // Read the document content and inject it into the prompt.
+        string? documentContent = null;
+        string? readError = null;
+        try
+        {
+            documentContent = await File.ReadAllTextAsync(mdPath, ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            readError = ex.Message;
+        }
+
+        if (readError is not null)
+        {
+            job.DocumentFailed(index, readError);
+            yield return new PhaseFailed(index, $"Failed to read {docName}: {readError}");
+            yield break;
+        }
+
+        string prompt = verifyPrompt
+            .Replace("<path>", options.SourcePath)
+            .Replace("<document>", docName);
+
+        // Structure: JSON instruction FIRST → document content → audit instructions → reminder.
+        // Models lose track of early instructions when a huge document is in the middle.
+        // Sandwiching the document between format instructions forces compliance.
+        prompt = "CRITICAL: Your ENTIRE response must be a single JSON object. " +
+                 "Start with { and end with }. No markdown. No code fences. No preamble. " +
+                 "No thinking aloud. No sign-off. ONLY the JSON object.\n\n" +
+                 $"## Document Under Audit: {docName}\n\n" +
+                 $"```markdown\n{documentContent}\n```\n\n---\n\n{prompt}" +
+                 "\n\nFINAL REMINDER: Output ONLY a JSON object. Start with { and end with }. " +
+                 "Any non-JSON text in your response will cause a parse failure.";
+
+        if (!string.IsNullOrWhiteSpace(options.Hints))
+            prompt += $"\n\n---\n\n### Additional Audit Focus\n\n{options.Hints.Trim()}";
+
+        LlmExecutionContext ctx = BuildVerifyContext(prompt, options);
+
+        (string? output, TokenUsage tokens, IReadOnlyList<string> lines, string? error) =
+            await RunLlmCallWithRetryAsync(ctx, executor, ct);
+
+        foreach (PhaseEvent evt in EmitCallOutput(index, lines, tokens, $"Verify {docName}"))
+            yield return evt;
+
+        if (error is not null)
+        {
+            job.DocumentFailed(index, error);
+            job.AppendLog($"Verify {docName} FAILED: {error}");
+            yield return new PhaseFailed(index, error);
+            yield break; // Don't abort the whole run — keep verifying remaining documents.
+        }
+
+        // Save the verification report as JSON only. Render to markdown on-demand in the UI.
+        string? outputPath = null;
+        string? saveError = null;
+        string? jsonParseWarning = null;
+        try
+        {
+            string jsonBaseName = $"verify-{Path.GetFileNameWithoutExtension(docName)}.json";
+            string jsonPath = Path.Combine(verifyDir, jsonBaseName);
+
+            string raw = output!.TrimEnd();
+
+            // Extract JSON from the LLM output — strip code fences or preamble.
+            VerifyReport? report = ParseVerifyJson(raw, out string? parseError);
+
+            if (report is null)
+            {
+                // JSON parse failed — save raw output as .md fallback so nothing is lost.
+                string mdFallback = $"verify-{docName}";
+                outputPath = Path.Combine(verifyDir, mdFallback);
+                string fallback = OutputWriter.StripPreamble(raw);
+                await File.WriteAllTextAsync(outputPath, fallback,
+                    new System.Text.UTF8Encoding(false), ct);
+                job.AppendLog($"Warning: JSON parse failed for {docName}: {parseError}");
+                jsonParseWarning = $"Warning: JSON parse failed — saved raw output as markdown. {parseError}";
+            }
+            else
+            {
+                // Recompute header from actual claims — the model cannot be trusted to count.
+                report.Document = docName;
+                report.RecomputeHeader();
+
+                // Save structured JSON (source of truth for everything).
+                outputPath = jsonPath;
+                string prettyJson = JsonSerializer.Serialize(report, _verifyJsonOptions);
+                await File.WriteAllTextAsync(jsonPath, prettyJson,
+                    new System.Text.UTF8Encoding(false), ct);
+            }
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            saveError = ex.Message;
+        }
+
+        if (jsonParseWarning is not null)
+            yield return new LogLine(index, jsonParseWarning);
+
+        if (saveError is not null)
+        {
+            job.DocumentFailed(index, $"Save failed: {saveError}");
+            yield return new PhaseFailed(index, saveError);
+            yield break;
+        }
+
+        string preview = output!.Length > 500 ? output[..500] + "…" : output;
+        job.DocumentCompleted(index, outputPath, preview, tokens);
+        job.AppendLog($"Verify {docName} completed → {Path.GetFileName(outputPath!)}");
+        yield return new PhaseCompleted(index, outputPath, tokens);
     }
 
     /// <summary>
@@ -1221,13 +1237,8 @@ public sealed class JobOrchestrator(
         (string? summaryProse, TokenUsage summaryTokens, IReadOnlyList<string> summaryLines, string? summaryError) =
             await RunLlmCallWithRetryAsync(summaryCtx, executor, ct);
 
-        foreach (string line in summaryLines)
-            yield return new LogLine(rollupIndex, line);
-
-        if (summaryTokens.Total > 0)
-            yield return new LogLine(rollupIndex,
-                $"Summary: {summaryTokens.Total:N0} tokens" +
-                (summaryTokens.CostUsd.HasValue ? $" (~${summaryTokens.CostUsd:F4})" : string.Empty));
+        foreach (PhaseEvent evt in EmitCallOutput(rollupIndex, summaryLines, summaryTokens, "Summary"))
+            yield return evt;
 
         // Combine: LLM prose first, then deterministic scorecard tables below.
         string summaryContent = summaryError is not null
@@ -1315,6 +1326,59 @@ public sealed class JobOrchestrator(
             job.AppendLog($"Remediation completed → verify-remediate.md ({totalFixes} fixes, 0 tokens — deterministic)");
             yield return new PhaseCompleted(remediateIndex, remediatePath, TokenUsage.Zero);
         }
+    }
+
+    /// <summary>
+    /// Yields each captured log line for a completed LLM call, followed by an optional token-usage
+    /// line. Centralizes the line-emit + token-line pattern repeated after every phase's LLM call.
+    /// </summary>
+    /// <param name="phaseNumber">Phase (or document) index the log lines belong to.</param>
+    /// <param name="lines">Captured stdout / diagnostic lines from the call.</param>
+    /// <param name="tokens">Token usage for the call.</param>
+    /// <param name="tokenLabel">Prefix for the token-usage line (e.g. <c>"Phase 3"</c>, <c>"  Group 'auth'"</c>);
+    /// pass null to suppress the token line entirely (used where the caller reports tokens elsewhere).</param>
+    private static IEnumerable<PhaseEvent> EmitCallOutput(
+        int phaseNumber, IReadOnlyList<string> lines, TokenUsage tokens, string? tokenLabel)
+    {
+        foreach (string line in lines)
+            yield return new LogLine(phaseNumber, line);
+
+        if (tokenLabel is not null && tokens.Total > 0)
+            yield return new LogLine(phaseNumber,
+                $"{tokenLabel}: {tokens.Total:N0} tokens" +
+                (tokens.CostUsd.HasValue ? $" (~${tokens.CostUsd:F4})" : string.Empty));
+    }
+
+    /// <summary>
+    /// Persists a phase's output, preferring an agentic backend's direct-write file when it exists
+    /// and is non-empty (stripping any leaked model preamble), otherwise writing the captured text
+    /// output via <see cref="OutputWriter"/>. Returns the absolute path of the saved file.
+    /// </summary>
+    /// <param name="directWritePath">The direct-write target the model may have written to, or null.</param>
+    /// <param name="filename">Output filename used when falling back to a text write.</param>
+    /// <param name="output">The captured text output (used only on the fallback path).</param>
+    /// <param name="options">Decompose options carrying the output root and project name.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The absolute path to the persisted output file.</returns>
+    private async Task<string> ResolveAndSaveOutputAsync(
+        string? directWritePath, string filename, string output, DecomposeOptions options, CancellationToken ct)
+    {
+        // If the model wrote the file directly, verify it exists and use it.
+        if (directWritePath is not null && File.Exists(directWritePath) &&
+            new FileInfo(directWritePath).Length > 0)
+        {
+            // Strip any model preamble that leaked into the direct-write file.
+            string raw = await File.ReadAllTextAsync(directWritePath, ct);
+            string stripped = OutputWriter.StripPreamble(raw);
+            if (stripped.Length != raw.Length)
+                await File.WriteAllTextAsync(directWritePath, stripped, new System.Text.UTF8Encoding(false), ct);
+
+            return directWritePath;
+        }
+
+        // Fall back to saving the text output (OpenAI/Ollama, or direct write failed).
+        return await outputWriter.WriteAsync(
+            options.OutputRoot, options.ProjectName, filename, output.TrimEnd(), ct);
     }
 
     /// <summary>
@@ -1551,9 +1615,12 @@ public sealed class JobOrchestrator(
             "thin"  => options.ThinMaxOutputTokens,
             _       => options.RegularMaxOutputTokens
         };
+        // A nonzero override is a true cap that replaces the per-weight default for
+        // every phase — needed for 1M-token models on heavy (thick) phases like Phase 3.
+        // Zero falls back to the per-weight default.
         int maxTokens = options.MaxOutputTokens == 0
             ? weightDefault
-            : Math.Min(options.MaxOutputTokens, weightDefault);
+            : options.MaxOutputTokens;
 
         string model = ResolveModel(phase.ModelWeight, options);
 
@@ -1569,6 +1636,7 @@ public sealed class JobOrchestrator(
             WorkingDirectory        = sourcePath,
             MaxTurns                = options.MaxTurns,
             MaxOutputTokens         = maxTokens,
+            ContextTier             = options.ContextTier,
             Timeout                 = TimeSpan.FromMinutes(options.TimeoutMinutes),
             EnableReadOnlyFileTools = true,
             EnableFileTools         = true,
@@ -1610,9 +1678,10 @@ public sealed class JobOrchestrator(
             "thin"  => options.ThinMaxOutputTokens,
             _       => options.RegularMaxOutputTokens
         };
+        // A nonzero override is a true cap that replaces the per-weight default.
         int maxTokens = options.MaxOutputTokens == 0
             ? weightDefault
-            : Math.Min(options.MaxOutputTokens, weightDefault);
+            : options.MaxOutputTokens;
 
         return new LlmExecutionContext
         {
@@ -1622,6 +1691,7 @@ public sealed class JobOrchestrator(
             ApiKey           = options.OpenAiApiKey,
             Endpoint         = options.OpenAiEndpoint,
             MaxOutputTokens  = maxTokens,
+            ContextTier      = options.ContextTier,
             Timeout          = TimeSpan.FromMinutes(options.TimeoutMinutes),
             WorkingDirectory = workingDirectory,
             EnableFileTools  = false,
@@ -1692,6 +1762,34 @@ public sealed class JobOrchestrator(
         return doc.RootElement.EnumerateArray()
             .Select(e => JsonDocument.Parse(e.GetRawText()).RootElement.Clone())
             .ToList();
+    }
+
+    /// <summary>
+    /// Parses a saved discovery document (e.g. <c>03-00-discovery.json</c>) into its ordered
+    /// list of component-group names. Tolerates markdown fences and leading prose exactly as a
+    /// live expansion run does, so the UI's resume planner agrees with what the orchestrator
+    /// will actually process. Returns null when the content holds no recoverable JSON array —
+    /// callers treat that as "no plan" rather than guessing.
+    /// </summary>
+    /// <param name="discoveryJson">Raw discovery file contents, possibly fence-wrapped.</param>
+    /// <returns>Group names in discovery order, or null if nothing parseable is present.</returns>
+    public static IReadOnlyList<string>? TryParseDiscoveryGroupNames(string discoveryJson)
+    {
+        if (string.IsNullOrWhiteSpace(discoveryJson)) return null;
+
+        try
+        {
+            List<JsonElement> items = ParseJsonArray(discoveryJson);
+            List<string> names = new(items.Count);
+            for (int i = 0; i < items.Count; i++)
+                names.Add(GetString(items[i], "groupName") ?? GetString(items[i], "name") ?? $"group {i + 1}");
+            return names;
+        }
+        catch (Exception)
+        {
+            // Malformed beyond recovery — treat as "no resume info" rather than guessing.
+            return null;
+        }
     }
 
     private static string ExtractJsonArray(string text)

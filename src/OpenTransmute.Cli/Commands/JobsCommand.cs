@@ -4,8 +4,13 @@ using OpenTransmute.Jobs;
 
 namespace OpenTransmute.Cli.Commands;
 
+/// <summary>
+/// <c>jobs</c> command — lists and inspects persisted decompose and compose jobs, including their
+/// phase/document progress.
+/// </summary>
 internal static class JobsCommand
 {
+    /// <summary>Builds the <c>jobs</c> command, wiring its subcommands and run action.</summary>
     internal static Command Build(IServiceProvider sp)
     {
         var cmd = new Command("jobs", "List and inspect decompose and compose jobs");
@@ -18,17 +23,17 @@ internal static class JobsCommand
 
         cmd.SetAction(async (parseResult, ct) =>
         {
-            var id         = parseResult.GetValue(idOpt);
-            var typeFilter = parseResult.GetValue(typeOpt)?.ToLowerInvariant();
+            Guid? id = parseResult.GetValue(idOpt);
+            string? typeFilter = parseResult.GetValue(typeOpt)?.ToLowerInvariant();
 
             var jobStore = sp.GetRequiredService<JobStore>();
 
             if (id.HasValue)
             {
-                var dj = jobStore.GetDecompose(id.Value);
+                DecomposeJob? dj = jobStore.GetDecompose(id.Value);
                 if (dj is not null) { PrintDecomposeDetail(dj); return 0; }
 
-                var cj = jobStore.GetCompose(id.Value);
+                ComposeJob? cj = jobStore.GetCompose(id.Value);
                 if (cj is not null) { PrintComposeDetail(cj); return 0; }
 
                 Console.Error.WriteLine($"Job {id} not found.");
@@ -53,6 +58,7 @@ internal static class JobsCommand
         return cmd;
     }
 
+    /// <summary>Prints a tabular summary of all decompose jobs (id, project, status, timing).</summary>
     private static void PrintDecomposeList(List<DecomposeJob> jobs)
     {
         Console.WriteLine($"Decompose  ({jobs.Count})");
@@ -67,6 +73,7 @@ internal static class JobsCommand
             Console.WriteLine($"  {j.Id,-36}  {j.Options.ProjectName,-22}  {j.Status,-10}  {j.CreatedAt:yyyy-MM-dd HH:mm}  {j.TotalElapsed?.ToString(@"mm\:ss") ?? "—"}");
     }
 
+    /// <summary>Prints a tabular summary of all compose jobs (id, output, status, timing).</summary>
     private static void PrintComposeList(List<ComposeJob> jobs)
     {
         Console.WriteLine($"Compose  ({jobs.Count})");
@@ -81,6 +88,7 @@ internal static class JobsCommand
             Console.WriteLine($"  {j.Id,-36}  {j.Options.OutputName,-22}  {j.Status,-10}  {j.CreatedAt:yyyy-MM-dd HH:mm}  {j.TotalElapsed?.ToString(@"mm\:ss") ?? "—"}");
     }
 
+    /// <summary>Prints the full detail of a single decompose job: metadata, per-phase status, and log.</summary>
     private static void PrintDecomposeDetail(DecomposeJob job)
     {
         Console.WriteLine($"ID:       {job.Id}");
@@ -106,7 +114,7 @@ internal static class JobsCommand
                 Console.WriteLine($"     Error: {phase.ErrorMessage}");
         }
 
-        var logSnapshot = job.GetLogSnapshot();
+        string[] logSnapshot = job.GetLogSnapshot();
         if (logSnapshot.Length > 0)
         {
             Console.WriteLine();
@@ -116,6 +124,7 @@ internal static class JobsCommand
         }
     }
 
+    /// <summary>Prints the full detail of a single compose job: metadata, status, and log.</summary>
     private static void PrintComposeDetail(ComposeJob job)
     {
         Console.WriteLine($"ID:       {job.Id}");

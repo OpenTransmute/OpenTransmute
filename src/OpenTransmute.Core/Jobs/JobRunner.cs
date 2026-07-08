@@ -61,38 +61,38 @@ public class JobRunner(
             {
                 logger.LogError(ex, "Unhandled error in job runner");
 
-                if (job is DecomposeJob dj2)
+                if (job is JobBase failed)
+                    MarkFailed(failed, ex);
+
+                // Persistence is per-type: each job has its own store, and VerifyJob isn't persisted at all.
+                switch (job)
                 {
-                    dj2.Status = JobStatus.Failed;
-                    dj2.ErrorMessage = ex.Message;
-                    dj2.NotifyChanged();
-                    await decomposePersistence.SaveAsync(dj2, stoppingToken);
-                }
-                else if (job is ComposeJob cj2)
-                {
-                    cj2.Status       = JobStatus.Failed;
-                    cj2.CompletedAt  = DateTime.UtcNow;
-                    cj2.ErrorMessage = ex.Message;
-                    cj2.NotifyChanged();
-                    await composePersistence.SaveAsync(cj2, stoppingToken);
-                }
-                else if (job is ImplementJob ij2)
-                {
-                    ij2.Status       = JobStatus.Failed;
-                    ij2.CompletedAt  = DateTime.UtcNow;
-                    ij2.ErrorMessage = ex.Message;
-                    ij2.NotifyChanged();
-                    await implementPersistence.SaveAsync(ij2, stoppingToken);
-                }
-                else if (job is VerifyJob vj2)
-                {
-                    vj2.Status       = JobStatus.Failed;
-                    vj2.CompletedAt  = DateTime.UtcNow;
-                    vj2.ErrorMessage = ex.Message;
-                    vj2.NotifyChanged();
+                    case DecomposeJob dj2:
+                        await decomposePersistence.SaveAsync(dj2, stoppingToken);
+                        break;
+                    case ComposeJob cj2:
+                        await composePersistence.SaveAsync(cj2, stoppingToken);
+                        break;
+                    case ImplementJob ij2:
+                        await implementPersistence.SaveAsync(ij2, stoppingToken);
+                        break;
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Transitions a job to the Failed terminal state with a completion timestamp and error message,
+    /// then notifies subscribers. Centralizes the state mutation that every job type's failure path shares.
+    /// </summary>
+    /// <param name="job">The job to mark as failed.</param>
+    /// <param name="ex">The exception whose message becomes the job's error description.</param>
+    private static void MarkFailed(JobBase job, Exception ex)
+    {
+        job.Status       = JobStatus.Failed;
+        job.CompletedAt  = DateTime.UtcNow;
+        job.ErrorMessage = ex.Message;
+        job.NotifyChanged();
     }
 
     private async Task RunDecomposeJobAsync(DecomposeJob job, CancellationToken ct)

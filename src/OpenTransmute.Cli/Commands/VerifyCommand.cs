@@ -5,8 +5,13 @@ using OpenTransmute.Models;
 
 namespace OpenTransmute.Cli.Commands;
 
+/// <summary>
+/// <c>verify</c> command — audits decomposition output against the original source by running a
+/// <see cref="OpenTransmute.Jobs.VerifyJob"/> through the orchestrator.
+/// </summary>
 internal static class VerifyCommand
 {
+    /// <summary>Builds the <c>verify</c> command, wiring its options and run action.</summary>
     internal static Command Build(IServiceProvider sp, CliSettings settings)
     {
         var cmd = new Command("verify", "Verify decomposition output accuracy against the original source code");
@@ -46,11 +51,8 @@ internal static class VerifyCommand
 
             OrchestratorType orchestratorType = orch ?? settings.Orchestrator;
 
-            if (orchestratorType == OrchestratorType.OpenAI && string.IsNullOrWhiteSpace(apiKey))
-            {
-                Console.Error.WriteLine("Error: OpenAI API key is required. Pass --api-key or set OPENAI_API_KEY.");
+            if (!JobConsole.ValidateOpenAiKey(orchestratorType, apiKey))
                 return 1;
-            }
 
             // Resolve source to an absolute path.
             string sourcePath = Path.GetFullPath(source);
@@ -87,22 +89,7 @@ internal static class VerifyCommand
                 Console.WriteLine($"Model:       {options.Model}");
             Console.WriteLine();
 
-            int logCursor = 0;
-            TaskCompletionSource done = new TaskCompletionSource();
-
-            job.OnChanged += () =>
-            {
-                string[] snapshot = job.GetLogSnapshot();
-                while (logCursor < snapshot.Length)
-                    Console.WriteLine(snapshot[logCursor++]);
-                if (job.Status is JobStatus.Completed or JobStatus.Failed)
-                    done.TrySetResult();
-            };
-
-            await jobQueue.EnqueueAsync(job, ct);
-            await done.Task;
-
-            Console.WriteLine();
+            await JobConsole.RunToCompletionAsync(job, t => jobQueue.EnqueueAsync(job, t), ct);
 
             // Print per-document summary.
             int passed = job.Documents.Count(d => d.Status == JobStatus.Completed);
@@ -110,14 +97,7 @@ internal static class VerifyCommand
             Console.WriteLine($"Documents verified: {passed}/{job.Documents.Count}" +
                 (failed > 0 ? $" ({failed} failed)" : string.Empty));
 
-            if (job.Status == JobStatus.Completed)
-            {
-                Console.WriteLine($"Completed in {job.TotalElapsed?.ToString(@"mm\:ss") ?? "??:??"}.");
-                return 0;
-            }
-
-            Console.Error.WriteLine($"Failed: {job.ErrorMessage}");
-            return 1;
+            return JobConsole.WriteVerdict(job);
         });
 
         return cmd;

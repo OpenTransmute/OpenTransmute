@@ -1,4 +1,5 @@
 using System.Text;
+using OpenTransmute.Models;
 
 namespace OpenTransmute.Llm;
 
@@ -124,6 +125,7 @@ public sealed class StreamDiagnosticLog : IDisposable
             _writer.WriteLine($"  Model: {ctx.Model ?? "(default)"}");
             _writer.WriteLine($"  Cwd: {ctx.WorkingDirectory ?? "(null)"}");
             _writer.WriteLine($"  MaxOutputTokens: {ctx.MaxOutputTokens}");
+            _writer.WriteLine($"  ContextTier: {(ctx.ContextTier == LlmContextTier.LongContext ? "long_context" : "default")}");
             _writer.WriteLine($"  Timeout: {ctx.Timeout}");
             _writer.WriteLine($"  EnableFileTools: {ctx.EnableFileTools}");
             _writer.WriteLine($"  EnableReadOnlyFileTools: {ctx.EnableReadOnlyFileTools}");

@@ -128,6 +128,10 @@ public class InventoryParser(
     private static string NormalizeName(string name) =>
         Regex.Replace(name.Trim().ToLowerInvariant(), @"\s+", " ");
 
+    /// <summary>
+    /// Splits an inventory markdown document into its top-level (<c>##</c>) sections, returning each
+    /// section's heading text paired with its body content.
+    /// </summary>
     private static List<(string Heading, string Content)> SplitSections(string markdown)
     {
         List<(string, string)> result = new List<(string, string)>();

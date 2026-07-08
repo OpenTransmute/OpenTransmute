@@ -14,6 +14,7 @@ namespace OpenTransmute.Filtering;
 /// </summary>
 public sealed class TransmuteIgnore
 {
+    /// <summary>Shared no-op instance that ignores nothing. Returned when there are no ignore rules.</summary>
     public static readonly TransmuteIgnore Empty = new();
 
     private readonly List<IgnorePattern> _patterns = new();

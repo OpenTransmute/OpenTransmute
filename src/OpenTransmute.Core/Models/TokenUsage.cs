@@ -7,10 +7,16 @@ namespace OpenTransmute.Models;
 /// </summary>
 public record TokenUsage(int InputTokens, int OutputTokens, double? CostUsd = null)
 {
+    /// <summary>Sum of input and output tokens.</summary>
     public int Total => InputTokens + OutputTokens;
 
+    /// <summary>An empty usage total — the additive identity.</summary>
     public static readonly TokenUsage Zero = new(0, 0);
 
+    /// <summary>
+    /// Combines two usage totals. Cost is summed only when at least one operand
+    /// carries a cost; otherwise the result's cost stays null (unknown).
+    /// </summary>
     public static TokenUsage operator +(TokenUsage a, TokenUsage b) =>
         new(a.InputTokens + b.InputTokens, a.OutputTokens + b.OutputTokens,
             a.CostUsd.HasValue || b.CostUsd.HasValue
